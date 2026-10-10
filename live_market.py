@@ -23,7 +23,7 @@ def extract_quote(response: Any, token: str) -> dict:
         if not isinstance(item, dict):
             continue
         item_token = str(item.get("exchange_token", item.get("instrument_token", item.get("token", ""))))
-        if item_token and item_token != str(token):
+        if item_token and item_token != str(token) and len(candidates) > 1:
             continue
         raw = item.get("ltp", item.get("last_traded_price", item.get("lastTradedPrice")))
         try:
