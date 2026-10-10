@@ -59,7 +59,12 @@ def demo_chain():
 
 with st.sidebar:
     st.header("Data & risk settings")
-    st.subheader("Live chart")
+    st.subheader("Practice market movement")
+    replay_enabled = st.toggle("Animate simulated market", value=True, help="Moves candles automatically for practice; no real quotes are used.")
+    replay_speed = st.slider("Replay speed (seconds per candle)", min_value=1, max_value=5, value=1)
+    replay_repeat = st.toggle("Loop replay when it reaches the end", value=True)
+    replay_file = st.file_uploader("Optional historical option-contract OHLCV CSV", type=["csv"], help="For historical replay, upload candles for the exact option contract with timestamp, open, high, low, close, volume.")
+    st.caption("Without a file, the app generates clearly labeled synthetic practice candles.")
     live_enabled = st.toggle("Enable Kotak Neo live quote polling", value=False, help="Fetches genuine broker quotes only when a valid consumer key is configured.")
     live_segment = st.selectbox("Live instrument segment", ["nse_cm", "nse_fo"], index=0, help="nse_cm for NIFTY index spot; nse_fo for a NIFTY option contract.")
     live_token = st.text_input("Live instrument token / index name", value="Nifty 50", help="Index example: Nifty 50. For options, enter the exact current pSymbol from the Kotak scrip master.")
@@ -74,7 +79,7 @@ with st.sidebar:
     lots = st.number_input("Lots per paper trade", min_value=1, max_value=100, value=1, step=1)
     charge_per_order = st.number_input("Estimated charges per order (₹)", min_value=0.0, value=20.0, step=1.0, help="Approximation for practice; set to your chosen estimate.")
     max_loss = st.number_input("Practice daily loss limit (₹)", min_value=0.0, value=2000.0, step=100.0)
-    st.caption("The app does not authenticate with Kotak Neo and cannot place live orders.")
+    st.caption("Paper mode only: no real orders are sent.")
 
 if chain_file:
     try:
@@ -132,6 +137,72 @@ if live_enabled:
 else:
     st.session_state.live_quote_error = ""
 
+# Prepare a replay stream. Historical option OHLCV is preferred; otherwise use clearly synthetic practice candles.
+def make_demo_replay(n=600):
+    rng = __import__("numpy").random.default_rng(20261010)
+    regimes = [0.10, -0.08, 0.02, -0.03, 0.12, -0.10]
+    changes = []
+    for i in range(n):
+        drift = regimes[(i // 70) % len(regimes)]
+        changes.append(drift + rng.normal(0, 1.25))
+    close = 180 + __import__("numpy").cumsum(changes)
+    close = __import__("numpy").maximum(close, 8)
+    open_ = __import__("numpy").concatenate(([close[0] - changes[0]], close[:-1]))
+    spread = rng.uniform(0.2, 2.2, size=n)
+    high = __import__("numpy").maximum(open_, close) + spread
+    low = __import__("numpy").maximum(0.05, __import__("numpy").minimum(open_, close) - spread * rng.uniform(0.7, 1.1, size=n))
+    start = pd.Timestamp("2026-10-09 09:15:00")
+    ts = pd.date_range(start=start, periods=n, freq="min")
+    return pd.DataFrame({"timestamp":ts,"open":open_.round(2),"high":high.round(2),"low":low.round(2),"close":close.round(2),"volume":rng.integers(100,6000,size=n)})
+
+replay_source = "SYNTHETIC PRACTICE DATA"
+try:
+    if replay_file is not None:
+        replay_raw = pd.read_csv(replay_file)
+        replay_cols = {str(c).strip().lower().replace(" ","_"):c for c in replay_raw.columns}
+        needed = ["timestamp","open","high","low","close","volume"]
+        missing = [c for c in needed if c not in replay_cols]
+        if missing:
+            st.sidebar.error("Replay CSV missing columns: " + ", ".join(missing))
+            replay_candles = make_demo_replay()
+        else:
+            replay_candles = replay_raw.rename(columns={replay_cols[c]:c for c in needed})[needed].copy()
+            replay_candles["timestamp"] = pd.to_datetime(replay_candles["timestamp"], errors="coerce")
+            for c in ["open","high","low","close","volume"]:
+                replay_candles[c] = pd.to_numeric(replay_candles[c], errors="coerce")
+            replay_candles = replay_candles.dropna(subset=needed).sort_values("timestamp").reset_index(drop=True)
+            if replay_candles.empty:
+                raise ValueError("No valid OHLCV rows found")
+            replay_source = "HISTORICAL OPTION OHLCV REPLAY"
+    else:
+        replay_candles = make_demo_replay()
+except Exception as exc:
+    st.sidebar.error(f"Replay CSV error: {exc}")
+    replay_candles = make_demo_replay()
+
+replay_fingerprint = f"{replay_source}:{len(replay_candles)}:{str(replay_candles.iloc[0]['timestamp'])}"
+if st.session_state.get("replay_fingerprint") != replay_fingerprint:
+    st.session_state.replay_fingerprint = replay_fingerprint
+    st.session_state.replay_start_counter = 0
+    st.session_state.replay_restart_requested = True
+if "replay_restart_requested" not in st.session_state:
+    st.session_state.replay_restart_requested = True
+if replay_enabled:
+    replay_counter = st_autorefresh(interval=replay_speed * 1000, key="practice_replay_refresh")
+else:
+    replay_counter = st.session_state.get("practice_replay_refresh", 0)
+if st.session_state.replay_restart_requested:
+    st.session_state.replay_start_counter = replay_counter
+    st.session_state.replay_restart_requested = False
+replay_index = max(0, int(replay_counter) - int(st.session_state.replay_start_counter))
+if replay_repeat:
+    replay_index = replay_index % len(replay_candles)
+else:
+    replay_index = min(replay_index, len(replay_candles)-1)
+replay_visible = replay_candles.iloc[:replay_index+1].tail(120).copy()
+replay_current_price = float(replay_candles.iloc[replay_index]["close"])
+replay_is_historical = replay_source == "HISTORICAL OPTION OHLCV REPLAY"
+
 if "paper_positions" not in st.session_state: st.session_state.paper_positions = []
 if "paper_orders" not in st.session_state: st.session_state.paper_orders = []
 if "paper_realized" not in st.session_state: st.session_state.paper_realized = 0.0
@@ -142,7 +213,19 @@ if st.session_state.paper_session_date != str(datetime.now().date()):
 
 tabs = st.tabs(["Scalper terminal", "Positions & P&L", "Trade journal"])
 with tabs[0]:
-    st.subheader("Live market chart")
+    st.subheader("Practice market chart")
+    if replay_enabled:
+        r1,r2,r3 = st.columns(3)
+        r1.metric("Simulated / replay premium (₹)", f"{replay_current_price:,.2f}")
+        r2.metric("Replay candle", f"{replay_index+1:,} / {len(replay_candles):,}")
+        r3.metric("Replay source", "Historical CSV" if replay_is_historical else "Synthetic demo")
+        replay_fig = go.Figure(data=[go.Candlestick(x=replay_visible["timestamp"],open=replay_visible["open"],high=replay_visible["high"],low=replay_visible["low"],close=replay_visible["close"],name="Practice premium")])
+        replay_fig.update_layout(template="plotly_dark",height=430,xaxis_rangeslider_visible=False,xaxis_title="Replay time",yaxis_title="Option premium (₹)",margin=dict(l=10,r=10,t=20,b=10))
+        st.plotly_chart(replay_fig,use_container_width=True)
+        st.caption(f"{replay_source}. Candles advance every {replay_speed} second(s). Historical CSV replays past prices; synthetic mode is generated practice data, not market data.")
+        if st.button("Restart practice replay"):
+            st.session_state.replay_start_counter = replay_counter
+            st.rerun()
     if live_enabled:
         if st.session_state.live_quote_error:
             st.error(st.session_state.live_quote_error)
@@ -165,7 +248,7 @@ with tabs[0]:
         else:
             st.info("Waiting for the first Kotak Neo quote...")
     else:
-        st.info("Live chart is off. Enable Kotak Neo live quote polling in the sidebar. Uploaded CSV and demo snapshots do not move automatically.")
+        st.info("Practice replay is paused. Enable Animate simulated market in the sidebar to advance candles.")
     a,b,c,d = st.columns(4)
     a.metric("PCR (OI)", f"{summary['pcr_oi']:.2f}" if pd.notna(summary["pcr_oi"]) else "N/A")
     a2 = float(sum(p["net_unrealized"] for p in st.session_state.paper_positions))
@@ -183,13 +266,18 @@ with tabs[0]:
         chosen = chain.loc[chain["strike"] == strike].iloc[-1]
         chain_ltp = chosen[price_col]
         current_ltp = float(chain_ltp) if pd.notna(chain_ltp) else 0.0
-        st.metric("Snapshot option LTP (₹)", f"{current_ltp:,.2f}" if current_ltp > 0 else "Unavailable")
+        # In practice replay mode, the selected contract follows the replayed option-premium candle.
+        if replay_enabled:
+            current_ltp = replay_current_price
+        st.session_state["selected_replay_instrument"] = f"NIFTY {int(strike)} {'CE' if side.startswith('CE') else 'PE'}"
+        st.session_state["selected_replay_price"] = current_ltp
+        st.metric("Current practice premium (₹)", f"{current_ltp:,.2f}" if current_ltp > 0 else "Unavailable")
         fig = go.Figure()
         fig.add_trace(go.Bar(x=nearby["strike"], y=nearby["ce_ltp"], name="CE premium"))
         fig.add_trace(go.Bar(x=nearby["strike"], y=nearby["pe_ltp"], name="PE premium"))
         fig.update_layout(template="plotly_dark", barmode="group", height=320, margin=dict(l=5,r=5,t=20,b=5), xaxis_title="Strike", yaxis_title="Premium (₹)", legend=dict(orientation="h",y=1.1))
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("This is a strike-wise snapshot chart, not a time-series contract candle chart. Repeated timestamped snapshots or contract OHLCV are required for that.")
+        st.caption("The upper chart is the moving practice contract chart. Upload matching historical option OHLCV for realistic replay; the built-in stream is synthetic.")
     with ticket_col:
         st.subheader("Quick paper order")
         instrument = f"NIFTY {int(strike)} {'CE' if side.startswith('CE') else 'PE'}"
@@ -200,14 +288,14 @@ with tabs[0]:
         st.write(f"**Quantity:** {qty} units ({lots} lot(s) × {lot_size})")
         st.write(f"**Entry notional:** ₹{order_price*qty:,.2f}")
         st.write(f"**Estimated entry charges:** ₹{charge_per_order:,.2f}")
-        if st.button("BUY · Open paper position", type="primary", use_container_width=True, disabled=demo or order_price <= 0):
+        if st.button("BUY · Open paper position", type="primary", use_container_width=True, disabled=order_price <= 0):
             if max_loss > 0 and st.session_state.paper_realized <= -max_loss:
                 st.error("Daily practice loss limit reached. New entries blocked.")
             else:
                 pos = {"id":len(st.session_state.paper_orders)+1,"instrument":instrument,"side":"LONG","strike":float(strike),"option_side":"CE" if side.startswith("CE") else "PE","quantity":qty,"lots":int(lots),"entry":float(order_price),"mark":float(order_price),"entry_charge":float(charge_per_order),"entry_time":datetime.now().isoformat(timespec="seconds"),"gross_unrealized":0.0,"net_unrealized":-float(charge_per_order)}
                 st.session_state.paper_positions.append(pos)
                 st.session_state.paper_orders.append({"time":pos["entry_time"],"action":"PAPER BUY","instrument":instrument,"quantity":qty,"price":float(order_price),"gross_pnl":0.0,"charges":float(charge_per_order),"net_pnl":-float(charge_per_order),"status":"OPEN"})
-                st.success("Paper position opened. No real order was sent.")
+                st.success("Paper position opened at the current practice price. No real order was sent.")
         st.divider()
         st.subheader("Current snapshot context")
         context = scalping_context(chain, spot=spot if spot > 0 else None, is_demo=demo)
@@ -253,7 +341,9 @@ with tabs[1]:
             chain_side = "ce_ltp" if pos["option_side"] == "CE" else "pe_ltp"
             found = chain.loc[chain["strike"] == pos["strike"]]
             observed = found.iloc[-1][chain_side] if not found.empty else float("nan")
-            if not demo and pd.notna(observed) and float(observed) > 0:
+            if replay_enabled and pos["instrument"] == st.session_state.get("selected_replay_instrument"):
+                pos["mark"] = float(st.session_state.get("selected_replay_price", pos["mark"]))
+            elif not demo and pd.notna(observed) and float(observed) > 0:
                 pos["mark"] = float(observed)
             pos["gross_unrealized"] = pnl_for_long(pos["entry"], pos["mark"], pos["quantity"])
             pos["net_unrealized"] = pos["gross_unrealized"] - pos["entry_charge"] - float(charge_per_order)
