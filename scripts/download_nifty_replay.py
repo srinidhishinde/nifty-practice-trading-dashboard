@@ -67,8 +67,10 @@ def fetch_history(client, neosymbol, start, end, interval):
 
 def main():
     parser = argparse.ArgumentParser(description="Download NIFTY spot and active near-ATM CE/PE historical candles from Kotak Neo.")
-    parser.add_argument("--start", required=True, help="YYYY-MM-DD; for 1/3/5 minute candles use a range no longer than 30 days.")
-    parser.add_argument("--end", required=True, help="YYYY-MM-DD")
+    default_end = (pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    default_start = (pd.Timestamp(default_end) - pd.Timedelta(days=29)).strftime("%Y-%m-%d")
+    parser.add_argument("--start", default=default_start, help=f"YYYY-MM-DD (default: {default_start}); 1/3/5 minute candles allow at most 30 days.")
+    parser.add_argument("--end", default=default_end, help=f"YYYY-MM-DD (default: {default_end})")
     parser.add_argument("--interval", choices=["1min", "3min", "5min", "10min", "15min"], default="1min")
     parser.add_argument("--count", type=int, default=40, help="Number of strikes to request on each side; must be a multiple of 10.")
     args = parser.parse_args()
@@ -107,13 +109,7 @@ def main():
         except Exception as exc:
             spot_errors.append(f"{token}: {exc}")
     if not spot:
-        # Current option chain marks its ATM contract; use that only as a strike-selection reference.
-        atm = next((x for x in contracts if str((next((it.get("instrument", {}).get("moneyness") for it in (unwrap(chain_response).get("call", []) + unwrap(chain_response).get("put", [])) if it.get("instrument", {}).get("neoSymbol") == x["neosymbol"]), "")) == "ATM"), None)
-        if atm:
-            spot = atm["strike"]
-            print("Warning: index quote unavailable; selecting CE/PE at broker-marked ATM strike, not claiming a spot quote.")
-        else:
-            sys.exit("Unable to retrieve NIFTY spot or ATM marker. No data downloaded. Quote errors: " + " | ".join(spot_errors))
+        sys.exit("Unable to retrieve a valid NIFTY 50 quote, so ATM selection would be unsafe. No data downloaded. Quote errors: " + " | ".join(spot_errors))
 
     strikes = sorted({c["strike"] for c in contracts})
     atm_strike = min(strikes, key=lambda x: abs(x - spot))
@@ -131,7 +127,7 @@ def main():
             path = OUT / f"{name}.csv"
             df.to_csv(path, index=False)
             print(f"  Saved {len(df)} candles -> {path}")
-            manifest.append({"dataset": name, "symbol": label, "neosymbol": neo_symbol, "interval": args.interval, "start": args.start, "end": args.end, "rows": len(df), "file": str(path)})
+            manifest.append({"dataset": name, "symbol": label, "neosymbol": neo_symbol, "strike": atm_strike if name in {"nifty_ce", "nifty_pe"} else "", "side": "CE" if name == "nifty_ce" else "PE" if name == "nifty_pe" else "SPOT", "interval": args.interval, "start": args.start, "end": args.end, "rows": len(df), "file": str(path)})
         except Exception as exc:
             print(f"  FAILED: {type(exc).__name__}: {exc}")
         time.sleep(1.0)  # gentle pacing to reduce rate-limit risk
