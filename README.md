@@ -1,45 +1,35 @@
 # NIFTY Scalper Practice Dashboard
 
-A standalone Streamlit NIFTY options scalper-style paper-trading terminal with an optional Kotak Neo live quote chart, simulated entries/exits, open-position P&L, estimated charges and a downloadable paper journal. It does not place real orders.
+A NIFTY options scalper-style **practice simulator** inspired by compact chart, strike-selection, one-tap order, position and P&L workflows. It supports automatically advancing practice candles and paper trades. No real orders are sent.
 
-## Live chart
+## Simulated live movement (works after market hours)
 
-- Enable Kotak Neo live quote polling in the sidebar.
-- The default live instrument is the NIFTY 50 index (segment nse_cm, instrument name Nifty 50).
-- To chart a NIFTY option premium, select nse_fo and enter the exact current pSymbol/token from the Kotak Neo scrip master.
-- The chart requests an actual Kotak Neo LTP every 3–15 seconds and plots quotes received in the current Streamlit session. It does not interpolate prices or silently fall back to Yahoo/demo values.
-- This is periodic quote polling, not a tick-by-tick WebSocket stream. It only moves when fresh quotes are returned and markets are trading.
-- Live quote access requires your own Kotak Neo Trade API consumer key and supported market-data permissions. This dashboard does not submit orders.
+- Enable **Animate simulated market** in the sidebar. The chart advances automatically, with a configurable 1–5 second delay per candle.
+- Without a file, it creates clearly labeled synthetic practice candles. This is for practising the UI and order/P&L workflow only; it is not historical or current market data.
+- For realistic replay, upload a historical option-contract OHLCV CSV with timestamp, open, high, low, close and volume. The chart replays one candle at a time and can loop.
+- The selected practice option premium follows the replay price so you can practise simulated entries, exits and P&L as the chart moves.
+- Synthetic/replay data must never be interpreted as live market prices or a predictive signal.
 
-### Configure credentials safely (Windows PowerShell)
+## Optional actual Kotak Neo quotes
 
-1. In the project folder, copy .env.example to .env.
-2. Edit .env locally and set NEO_CONSUMER_KEY to the Trade API token from your Kotak Neo app.
-3. Do not upload .env, paste your token into chat, or put it in source code. The repository ignores .env.
-4. Install packages and restart Streamlit:
+The sidebar also has a separate **Enable Kotak Neo live quote polling** control. This is optional and distinct from practice replay. It requires your own Trade API consumer key and market-data access.
 
-    python -m pip install -r requirements.txt
-    python -m streamlit run app.py
+1. Copy .env.example to .env locally.
+2. Set NEO_CONSUMER_KEY in .env.
+3. Do not commit .env or share the token.
+4. Install requirements and restart Streamlit.
 
-If the API returns an error, the app displays it and does not switch to synthetic or third-party prices. Check the consumer key, current token, segment and API access.
+The live quote chart polls every 3–15 seconds. It is not a tick-by-tick WebSocket stream. There is no silent fallback to third-party or demo data when the API fails.
 
 ## Paper trading and P&L
 
-- Compact scalper terminal with CE/PE selector, strike selector, snapshot premium and one-click simulated BUY.
-- Paper position quantity in lots multiplied by the editable lot-size setting.
-- Open-position mark-to-snapshot, simulated close/exit, gross/net P&L, estimated charges and cumulative closed-trade P&L chart.
-- Downloadable paper order journal CSV.
-- Demo data is clearly labeled and paper entries are disabled in demo mode.
+- CE/PE and strike selection, simulated BUY and close actions.
+- Position size as lots × editable lot-size setting.
+- Open-position, realized and unrealized P&L, estimated charges, cumulative closed-trade chart and downloadable CSV journal.
+- Paper orders do not reach a broker. Charges are configurable estimates; taxes/levies, spread, slippage, partial fills and latency are not fully modeled.
+- Paper positions and journal are held in Streamlit session state. Download the journal to retain a copy.
 
-## Data and P&L limitations
-
-- The live chart uses broker LTP quotes. The option-chain chart and paper-position marking still depend on the uploaded option-chain CSV; they do not yet automatically ingest a full live option chain.
-- A single option-chain snapshot is not a 1-minute/3-minute contract candle. Use real option-contract OHLCV or repeated timestamped snapshots to build a premium candle chart.
-- P&L is a practice estimate: configured per-order charges are deducted, but taxes/levies, bid-ask spread, slippage, partial fills and latency are not fully modeled.
-- The default lot-size value is editable and is not a guarantee of the current NIFTY contract lot size. Verify the relevant contract specification.
-- Paper positions and journal are stored in Streamlit session state only. Download the journal CSV to keep records; data may be lost when the session resets.
-
-## Run on Windows PowerShell
+## Install and run (Windows PowerShell)
 
     cd $HOME\Downloads\nifty-practice-trading-dashboard
     python -m venv .venv
@@ -48,14 +38,10 @@ If the API returns an error, the app displays it and does not switch to syntheti
     python -m pytest -q
     python -m streamlit run app.py
 
-Open the localhost URL printed by Streamlit, usually http://localhost:8501.
+## Historical replay CSV
 
-## CSV inputs
+Use a file for the exact option contract with these columns:
 
-Option-chain CSV: include strike and, for full charts/P&L marking, CE LTP, PE LTP, CE OI, PE OI, CE Change in OI, PE Change in OI, CE Volume and PE Volume.
+    timestamp,open,high,low,close,volume
 
-Underlying OHLCV CSV: use a separate CSV with timestamp, open, high, low, close, volume. Do not treat an option-chain snapshot as OHLCV.
-
-## Tests
-
-Run python -m pytest -q to run existing tests plus paper P&L and live-quote response normalization tests.
+A single option-chain snapshot (strikes with CE/PE LTP and OI) is not an OHLCV time series. The chain panel remains a snapshot; to replay historical premium movement, upload the contract's actual candle CSV.
