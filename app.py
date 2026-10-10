@@ -1,179 +1,173 @@
 from __future__ import annotations
 
-import time
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from replay import add_indicators, normalize_ohlcv, resample_ohlcv, visible_bar_count
+from chain_utils import normalize_option_chain, summarize_chain, scalping_context
 
-st.set_page_config(page_title="NIFTY Practice Desk", page_icon="📈", layout="wide")
+st.set_page_config(page_title="NIFTY Options Scalper", page_icon="📈", layout="wide")
 st.markdown("""
 <style>
-.block-container {padding-top: 1.2rem; max-width: 1600px}
-[data-testid="stMetric"] {background: #101923; border: 1px solid #263747; padding: 12px; border-radius: 10px}
-h1,h2,h3 {letter-spacing: -.02em}
+.block-container {padding-top: 1rem; max-width: 1700px}
+[data-testid="stMetric"] {background: #111b26; border: 1px solid #293b4d; padding: 12px; border-radius: 10px}
 </style>
 """, unsafe_allow_html=True)
-st.title("📈 NIFTY Practice Trading Desk")
-st.caption("HISTORICAL REPLAY · SIMULATED ORDERS ONLY · NO BROKER EXECUTION")
-st.warning("Off-hours practice uses uploaded historical candles. This is not a live market feed. Never upload option-chain snapshots as OHLCV candles.")
+
+st.title("📈 NIFTY Options Scalper")
+st.caption("NIFTY ONLY · OPTION-CHAIN ANALYSIS · PRACTICE / RESEARCH · NO BROKER EXECUTION")
+st.warning("This dashboard does not connect to Kotak Neo or fetch live market data. Upload a current option-chain CSV to analyze real observations. Demo values are illustrative only; never trade from demo data.")
+
+ALIASES = {
+    "strike": ["strike", "strike price", "strike_price", "strikeprice"],
+    "ce_ltp": ["ce ltp", "call ltp", "call last price", "ce last price", "call ltp (₹)", "ce_ltp"],
+    "pe_ltp": ["pe ltp", "put ltp", "put last price", "pe last price", "put ltp (₹)", "pe_ltp"],
+    "ce_oi": ["ce oi", "call oi", "call open interest", "ce open interest", "ce_oi"],
+    "pe_oi": ["pe oi", "put oi", "put open interest", "pe open interest", "pe_oi"],
+    "ce_change_oi": ["ce change in oi", "ce chg in oi", "call change in oi", "call chg in oi", "ce_change_oi"],
+    "pe_change_oi": ["pe change in oi", "pe chg in oi", "put change in oi", "put chg in oi", "pe_change_oi"],
+    "ce_volume": ["ce volume", "call volume", "ce_volume"],
+    "pe_volume": ["pe volume", "put volume", "pe_volume"],
+    "ce_iv": ["ce iv", "call iv", "ce_iv"],
+    "pe_iv": ["pe iv", "put iv", "pe_iv"],
+    "ce_delta": ["ce delta", "call delta", "ce_delta"],
+    "pe_delta": ["pe delta", "put delta", "pe_delta"],
+    "timestamp": ["timestamp", "time", "datetime", "date time", "snapshot time"],
+}
+
+def demo_chain() -> pd.DataFrame:
+    strikes = list(range(24000, 25101, 50))
+    center = 24550
+    rows = []
+    for k in strikes:
+        dist = (k - center) / 50
+        rows.append({
+            "strike": k,
+            "ce_ltp": round(max(1, 220 - dist * 8 + abs(dist) * 1.2), 2),
+            "pe_ltp": round(max(1, 215 + dist * 8 + abs(dist) * 1.2), 2),
+            "ce_oi": int(100000 + max(0, dist) * 12000 + (k % 7) * 1300),
+            "pe_oi": int(90000 + max(0, -dist) * 13500 + (k % 5) * 1700),
+            "ce_change_oi": int((dist + 2) * 800),
+            "pe_change_oi": int((-dist + 2) * 750),
+            "ce_volume": int(10000 + max(0, 5 - abs(dist)) * 2500),
+            "pe_volume": int(9500 + max(0, 5 - abs(dist)) * 2600),
+            "ce_iv": round(13 + abs(dist) * .35, 2),
+            "pe_iv": round(13.4 + abs(dist) * .34, 2),
+            "ce_delta": round(max(.05, min(.95, .5 - dist * .045)), 3),
+            "pe_delta": round(max(-.95, min(-.05, -.5 - dist * .045)), 3),
+        })
+    return pd.DataFrame(rows)
 
 with st.sidebar:
-    st.header("Replay controls")
-    uploaded = st.file_uploader("Upload historical OHLCV CSV", type=["csv"])
-    timeframe = st.selectbox("Chart timeframe", [1, 3, 5, 10, 15], index=2, format_func=lambda x: f"{x} minute")
-    speed = st.select_slider("Replay speed", options=[1, 2, 5, 10], value=1, format_func=lambda x: f"{x}×")
-    st.caption("1× = one simulated second per real second. Bars appear at their selected timeframe interval.")
-    st.divider()
-    st.header("Virtual account")
-    if "starting_capital" not in st.session_state:
-        st.session_state.starting_capital = 50000.0
-    st.session_state.starting_capital = st.number_input("Starting capital (₹)", min_value=1000.0, max_value=100000000.0, value=float(st.session_state.starting_capital), step=5000.0)
-    st.caption("Capital is a practice setting, not connected to your broker.")
+    st.header("Scalper controls")
+    chain_file = st.file_uploader("Upload option-chain snapshot CSV", type=["csv"])
+    spot = st.number_input("Observed NIFTY spot (₹)", min_value=0.0, value=0.0, step=50.0, help="Enter the observed spot from your market source. Leave 0 if unknown.")
+    timeframe = st.selectbox("Entry timeframe", ["1-minute", "2-minute", "3-minute"], index=2)
+    trend_file = st.file_uploader("Optional NIFTY index OHLCV CSV", type=["csv"], help="Separate underlying candles: timestamp, open, high, low, close, volume. This is not option-chain data.")
+    st.caption("Live Kotak integration is not implemented. Uploaded data is analyzed as supplied; check its timestamp and source.")
 
-def sample_data() -> pd.DataFrame:
-    # Static, clearly-labelled illustrative data only; never presented as market data.
-    ts = pd.date_range("2025-01-02 09:15", periods=120, freq="min")
-    close = [23500.0]
-    for i in range(1, len(ts)):
-        close.append(close[-1] + (0.8 if i % 7 < 4 else -1.1) + ((i % 5) - 2) * 0.45)
-    return pd.DataFrame({"timestamp": ts, "open": close, "high": [x+4 for x in close],
-                         "low": [x-4 for x in close], "close": close,
-                         "volume": [1000 + (i*137)%1700 for i in range(len(close))]})
-
-if uploaded:
+if chain_file:
     try:
-        raw = normalize_ohlcv(pd.read_csv(uploaded))
-        source_label = "UPLOADED HISTORICAL DATA"
+        chain = normalize_option_chain(pd.read_csv(chain_file), ALIASES)
+        source_label = "UPLOADED OPTION-CHAIN SNAPSHOT"
     except Exception as exc:
-        st.error(f"CSV validation failed: {exc}")
+        st.error(f"Option-chain CSV validation failed: {exc}")
         st.stop()
 else:
-    raw = sample_data()
-    source_label = "ILLUSTRATIVE DEMO DATA — NOT REAL NIFTY PRICES"
+    chain = normalize_option_chain(demo_chain(), ALIASES)
+    source_label = "ILLUSTRATIVE DEMO — NOT LIVE DATA"
 
-try:
-    bars = resample_ohlcv(raw, timeframe)
-except Exception as exc:
-    st.error(str(exc))
+if chain.empty:
+    st.error("No valid strike rows found.")
     st.stop()
 
-if "replay_started_at" not in st.session_state: st.session_state.replay_started_at = None
-if "elapsed_before_pause" not in st.session_state: st.session_state.elapsed_before_pause = 0.0
-if "is_playing" not in st.session_state: st.session_state.is_playing = False
-if "trades" not in st.session_state: st.session_state.trades = []
-if "journal" not in st.session_state: st.session_state.journal = []
-if "active_trade" not in st.session_state: st.session_state.active_trade = None
-if "replay_key" not in st.session_state: st.session_state.replay_key = None
+summary = summarize_chain(chain, spot=spot if spot > 0 else None)
+atm_strike = summary["reference_strike"]
+nearby = chain.loc[(chain["strike"] - atm_strike).abs() <= 500].copy()
+if nearby.empty:
+    nearby = chain.copy()
 
-data_key = (source_label, len(bars), str(bars["timestamp"].iloc[0]), timeframe)
-if st.session_state.replay_key != data_key:
-    st.session_state.replay_key = data_key
-    st.session_state.replay_started_at = None
-    st.session_state.elapsed_before_pause = 0.0
-    st.session_state.is_playing = False
-    st.session_state.trades = []
-    st.session_state.journal = []
-    st.session_state.active_trade = None
+st.info(f"**Data status: {source_label}** · {len(chain)} strikes · Reference strike {atm_strike:,.0f}" + (f" · Snapshot timestamp: {summary['timestamp']}" if summary["timestamp"] else " · Snapshot timestamp not provided"))
+if source_label.startswith("ILLUSTRATIVE"):
+    st.error("DEMO MODE: all prices, OI and indicators below are invented examples for layout testing. No BUY CE / BUY PE signal is produced from demo data.")
 
-c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-with c1:
-    if st.button("▶ Play", use_container_width=True):
-        st.session_state.replay_started_at = time.monotonic()
-        st.session_state.is_playing = True
-with c2:
-    if st.button("⏸ Pause", use_container_width=True):
-        if st.session_state.is_playing and st.session_state.replay_started_at is not None:
-            st.session_state.elapsed_before_pause += (time.monotonic() - st.session_state.replay_started_at) * speed
-        st.session_state.is_playing = False
-        st.session_state.replay_started_at = None
-with c3:
-    if st.button("↺ Reset", use_container_width=True):
-        st.session_state.replay_started_at = None
-        st.session_state.elapsed_before_pause = 0.0
-        st.session_state.is_playing = False
-        st.session_state.trades = []
-        st.session_state.journal = []
-        st.session_state.active_trade = None
-with c4:
-    st.info(f"**{source_label}** · {len(raw):,} source rows · {len(bars):,} chart bars")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("PCR (OI)", f"{summary['pcr_oi']:.2f}" if pd.notna(summary["pcr_oi"]) else "N/A")
+m2.metric("CE OI", f"{summary['total_ce_oi']:,.0f}")
+m3.metric("PE OI", f"{summary['total_pe_oi']:,.0f}")
+m4.metric("Reference strike", f"{atm_strike:,.0f}", "Observed spot" if spot > 0 else "Strike midpoint proxy")
 
-elapsed = st.session_state.elapsed_before_pause
-if st.session_state.is_playing and st.session_state.replay_started_at is not None:
-    elapsed += (time.monotonic() - st.session_state.replay_started_at) * speed
-visible = visible_bar_count(elapsed, timeframe, len(bars))
-shown = add_indicators(bars.iloc[:visible].copy())
-done = visible >= len(bars)
-if done and st.session_state.is_playing:
-    st.session_state.is_playing = False
-    st.session_state.replay_started_at = None
-    st.session_state.elapsed_before_pause = max(0, (len(bars)-1) * timeframe * 60)
-
-if visible:
-    last = shown.iloc[-1]
-    previous = shown.iloc[-2]["close"] if len(shown) > 1 else last["open"]
-    change = float(last["close"] - previous)
-    a,b,c,d,e = st.columns(5)
-    a.metric("Replay close", f"{last['close']:,.2f}", f"{change:+.2f}")
-    b.metric("Bars revealed", f"{visible}/{len(bars)}")
-    c.metric("RSI (14)", f"{last['RSI 14']:.1f}")
-    d.metric("EMA 9 / 21", f"{last['EMA 9']:.2f} / {last['EMA 21']:.2f}")
-    e.metric("VWAP", f"{last['VWAP']:.2f}")
-
-    fig = go.Figure(data=[go.Candlestick(x=shown["timestamp"], open=shown["open"], high=shown["high"], low=shown["low"], close=shown["close"], name="NIFTY replay")])
-    fig.add_trace(go.Scatter(x=shown["timestamp"], y=shown["EMA 9"], name="EMA 9", line=dict(width=1.5)))
-    fig.add_trace(go.Scatter(x=shown["timestamp"], y=shown["EMA 21"], name="EMA 21", line=dict(width=1.5)))
-    fig.add_trace(go.Scatter(x=shown["timestamp"], y=shown["VWAP"], name="VWAP", line=dict(width=1.5, dash="dot")))
-    fig.update_layout(template="plotly_dark", height=560, margin=dict(l=10,r=10,t=25,b=10), xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.02), uirevision="practice")
+left, right = st.columns([1.35, 1])
+with left:
+    st.subheader("CE vs PE premium by strike")
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=nearby["strike"], y=nearby["ce_ltp"], name="CE LTP"))
+    fig.add_trace(go.Bar(x=nearby["strike"], y=nearby["pe_ltp"], name="PE LTP"))
+    fig.update_layout(template="plotly_dark", barmode="group", height=420, xaxis_title="Strike", yaxis_title="Premium (₹)", legend=dict(orientation="h", y=1.08), margin=dict(l=10,r=10,t=35,b=10))
     st.plotly_chart(fig, use_container_width=True)
-    vfig = go.Figure(go.Bar(x=shown["timestamp"], y=shown["volume"], name="Volume"))
-    vfig.update_layout(template="plotly_dark", height=170, margin=dict(l=10,r=10,t=10,b=10), showlegend=False)
-    st.plotly_chart(vfig, use_container_width=True)
-    rfig = go.Figure()
-    rfig.add_trace(go.Scatter(x=shown["timestamp"], y=shown["RSI 14"], name="RSI 14"))
-    rfig.add_hline(y=70, line_dash="dash")
-    rfig.add_hline(y=30, line_dash="dash")
-    rfig.update_layout(template="plotly_dark", height=210, yaxis=dict(range=[0,100]), margin=dict(l=10,r=10,t=10,b=10))
-    st.plotly_chart(rfig, use_container_width=True)
-else:
-    st.info("Press Play to start the replay clock.")
+with right:
+    st.subheader("Open interest")
+    oi = go.Figure()
+    oi.add_trace(go.Bar(x=nearby["strike"], y=nearby["ce_oi"], name="CE OI"))
+    oi.add_trace(go.Bar(x=nearby["strike"], y=nearby["pe_oi"], name="PE OI"))
+    oi.update_layout(template="plotly_dark", barmode="group", height=420, xaxis_title="Strike", yaxis_title="Open interest", legend=dict(orientation="h", y=1.08), margin=dict(l=10,r=10,t=35,b=10))
+    st.plotly_chart(oi, use_container_width=True)
+
+st.subheader("Change in OI")
+chg = go.Figure()
+chg.add_trace(go.Bar(x=nearby["strike"], y=nearby["ce_change_oi"], name="CE change in OI"))
+chg.add_trace(go.Bar(x=nearby["strike"], y=nearby["pe_change_oi"], name="PE change in OI"))
+chg.update_layout(template="plotly_dark", barmode="group", height=300, xaxis_title="Strike", yaxis_title="Change in OI", legend=dict(orientation="h", y=1.12), margin=dict(l=10,r=10,t=35,b=10))
+st.plotly_chart(chg, use_container_width=True)
+
+st.subheader("Scalping context")
+context = scalping_context(chain, spot=spot if spot > 0 else None, is_demo=source_label.startswith("ILLUSTRATIVE"))
+c1, c2, c3 = st.columns(3)
+c1.metric("Bias", context["bias"])
+c2.metric("Nearby CE volume", f"{context['near_ce_volume']:,.0f}")
+c3.metric("Nearby PE volume", f"{context['near_pe_volume']:,.0f}")
+st.write(context["explanation"])
+st.caption("OI/PCR and option premiums are context, not a standalone entry trigger. A credible 1–3 minute signal also needs timestamped underlying candles, price-action confirmation, liquidity/spread checks and fresh option quotes. No automated trade recommendation is generated from a single snapshot.")
+
+with st.expander("Normalized option-chain table"):
+    display_cols = [c for c in ["strike","ce_ltp","pe_ltp","ce_oi","pe_oi","ce_change_oi","pe_change_oi","ce_volume","pe_volume","ce_iv","pe_iv","ce_delta","pe_delta"] if c in chain]
+    st.dataframe(chain[display_cols], use_container_width=True, hide_index=True)
+    st.download_button("Download normalized chain CSV", chain[display_cols].to_csv(index=False).encode("utf-8"), "nifty_option_chain_normalized.csv", "text/csv")
+
+if trend_file:
+    try:
+        raw = pd.read_csv(trend_file)
+        cols = {str(c).strip().lower(): c for c in raw.columns}
+        required = ["timestamp", "open", "high", "low", "close", "volume"]
+        missing = [x for x in required if x not in cols]
+        if missing:
+            st.error("Underlying OHLCV CSV missing columns: " + ", ".join(missing))
+        else:
+            candles = raw.rename(columns={cols[x]: x for x in required})
+            candles["timestamp"] = pd.to_datetime(candles["timestamp"], errors="coerce")
+            for col in ["open","high","low","close","volume"]:
+                candles[col] = pd.to_numeric(candles[col], errors="coerce")
+            candles = candles.dropna(subset=required).sort_values("timestamp")
+            if len(candles) < 2:
+                st.warning("Upload at least two valid underlying OHLCV rows.")
+            else:
+                candles["ema9"] = candles["close"].ewm(span=9, adjust=False).mean()
+                candles["ema21"] = candles["close"].ewm(span=21, adjust=False).mean()
+                candles["vwap"] = (candles["close"] * candles["volume"]).cumsum() / candles["volume"].replace(0, pd.NA).cumsum()
+                st.subheader("NIFTY underlying trend (uploaded OHLCV)")
+                tf = go.Figure(data=[go.Candlestick(x=candles["timestamp"], open=candles["open"], high=candles["high"], low=candles["low"], close=candles["close"], name="NIFTY")])
+                tf.add_trace(go.Scatter(x=candles["timestamp"], y=candles["ema9"], name="EMA 9"))
+                tf.add_trace(go.Scatter(x=candles["timestamp"], y=candles["ema21"], name="EMA 21"))
+                tf.add_trace(go.Scatter(x=candles["timestamp"], y=candles["vwap"], name="VWAP"))
+                tf.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=25,b=10))
+                st.plotly_chart(tf, use_container_width=True)
+                last = candles.iloc[-1]
+                trend = "UP" if last["close"] > last["ema9"] > last["ema21"] else "DOWN" if last["close"] < last["ema9"] < last["ema21"] else "MIXED"
+                st.metric("Last-candle trend context", trend, f"Close {last['close']:,.2f}")
+                st.caption("Trend context only. EMA/VWAP values are computed from the uploaded candles, not a live feed.")
+    except Exception as exc:
+        st.error(f"Could not process underlying candles: {exc}")
 
 st.divider()
-st.subheader("Practice order ticket")
-left, right = st.columns([1, 1])
-with left:
-    side = st.radio("Practice action", ["BUY CE", "BUY PE", "WAIT"], horizontal=True)
-    instrument = st.selectbox("Practice instrument", ["NIFTY CE", "NIFTY PE"])
-    strike = st.number_input("Option strike (manual practice label)", min_value=1, value=23500, step=50)
-    qty = st.number_input("Quantity / lots multiplier", min_value=1, max_value=100, value=1)
-    entry_default = float(shown.iloc[-1]["close"]) if visible else 0.0
-    entry = st.number_input("Simulated entry premium (₹)", min_value=0.0, value=max(0.05, entry_default if entry_default > 0 else 100.0), step=0.5)
-    stop = st.number_input("Stop-loss premium (₹)", min_value=0.0, value=max(0.0, round(entry * 0.8, 2)), step=0.5)
-    target = st.number_input("Target premium (₹)", min_value=0.0, value=round(entry * 1.3, 2), step=0.5)
-    if st.button("Record practice decision", type="primary", use_container_width=True):
-        ts = str(shown.iloc[-1]["timestamp"]) if visible else "Replay not started"
-        row = {"time": ts, "decision": side, "instrument": instrument, "strike": int(strike), "quantity": int(qty), "entry": float(entry), "stop": float(stop), "target": float(target), "status": "PRACTICE ONLY"}
-        st.session_state.journal.append(row)
-        if side != "WAIT":
-            st.session_state.active_trade = row
-        st.success("Decision recorded in this browser session.")
-with right:
-    st.markdown("**Practice guardrails**")
-    st.write("- Orders never reach Kotak Neo or any broker.")
-    st.write("- Option premium is manually entered; NIFTY index candles do not imply an option premium.")
-    st.write("- Historical option-chain/option OHLCV data is needed for realistic option P&L.")
-    st.write("- This starter does not fabricate option-chain prices or auto-fill trades.")
-    st.write("- A target/stop is a journal plan until you enter an observed exit premium.")
-
-if st.session_state.journal:
-    st.subheader("Decision journal")
-    journal = pd.DataFrame(st.session_state.journal)
-    st.dataframe(journal, use_container_width=True, hide_index=True)
-    st.download_button("Download journal CSV", journal.to_csv(index=False).encode("utf-8"), "practice_journal.csv", "text/csv")
-else:
-    st.caption("No practice decisions recorded yet.")
-
-if st.session_state.is_playing and not done:
-    time.sleep(1)
-    st.rerun()
+st.subheader("Data requirements for genuine scalping")
+st.markdown("- Option-chain snapshots show strike-wise fields at a point in time; they are not option candles. For a 1–3 minute premium chart, collect repeated timestamped snapshots or actual CE/PE contract OHLCV.\n- Use the current expiry and actual listed strikes. Validate lot size, spread, quote age, market hours and timestamp before using any signal.\n- This practice dashboard neither authenticates with Kotak Neo nor submits orders.")
