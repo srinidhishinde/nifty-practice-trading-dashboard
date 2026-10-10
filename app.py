@@ -24,7 +24,7 @@ div.stButton > button {min-height: 2.7rem; font-weight: 600}
 """, unsafe_allow_html=True)
 st.title("NIFTY Scalper")
 st.caption("PAPER TRADING ONLY · SIMULATED POSITIONS · NO BROKER ORDERS")
-st.warning("No live broker feed is connected. Upload a current option-chain snapshot and/or NIFTY OHLCV CSV. Demo data is illustrative only and must never be used for trading.")
+st.info("Historical replay can load automatically from data/replay/ after running the Kotak downloader. Without downloaded files, the fallback stream is synthetic practice data. No real orders are sent.")
 
 ALIASES = {
  "strike":["strike","strike price","strike_price","strikeprice"],
@@ -100,7 +100,7 @@ ref_strike = summary["reference_strike"]
 nearby = chain.loc[(chain["strike"]-ref_strike).abs() <= 500].copy()
 if nearby.empty: nearby = chain.copy()
 st.info(f"DATA: {source} · {len(chain)} strikes · reference strike {ref_strike:,.0f}" + (f" · timestamp {summary['timestamp']}" if summary["timestamp"] else " · no timestamp supplied"))
-if demo: st.error("DEMO MODE: prices, OI and volume are invented. Paper orders are disabled until you upload a real snapshot.")
+if demo: st.warning("OPTION-CHAIN PANEL: illustrative data only until you upload a real option-chain snapshot. Historical replay charts use separate downloaded OHLCV files when available.")
 
 if "live_quote_history" not in st.session_state: st.session_state.live_quote_history = []
 if "live_quote_error" not in st.session_state: st.session_state.live_quote_error = ""
