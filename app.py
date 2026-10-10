@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dotenv import load_dotenv
+from streamlit_autorefresh import st_autorefresh
 
+from live_market import extract_quote
 from chain_utils import normalize_option_chain, summarize_chain, scalping_context
 from paper_trading import pnl_for_long, close_long
 
+load_dotenv()
 st.set_page_config(page_title="NIFTY Scalper Practice", page_icon="📈", layout="wide")
 st.markdown("""
 <style>
@@ -54,6 +59,13 @@ def demo_chain():
 
 with st.sidebar:
     st.header("Data & risk settings")
+    st.subheader("Live chart")
+    live_enabled = st.toggle("Enable Kotak Neo live quote polling", value=False, help="Fetches genuine broker quotes only when a valid consumer key is configured.")
+    live_segment = st.selectbox("Live instrument segment", ["nse_cm", "nse_fo"], index=0, help="nse_cm for NIFTY index spot; nse_fo for a NIFTY option contract.")
+    live_token = st.text_input("Live instrument token / index name", value="Nifty 50", help="Index example: Nifty 50. For options, enter the exact current pSymbol from the Kotak scrip master.")
+    refresh_seconds = st.slider("Chart refresh interval (seconds)", min_value=3, max_value=15, value=5)
+    max_live_points = st.slider("Live chart history (points)", min_value=30, max_value=600, value=180, step=30)
+    st.caption("Set NEO_CONSUMER_KEY in a local .env file. Never commit credentials.")
     chain_file = st.file_uploader("Option-chain CSV snapshot", type=["csv"])
     candles_file = st.file_uploader("Optional NIFTY OHLCV CSV", type=["csv"])
     spot = st.number_input("Observed NIFTY spot (₹)", min_value=0.0, value=0.0, step=50.0)
@@ -83,6 +95,36 @@ if nearby.empty: nearby = chain.copy()
 st.info(f"DATA: {source} · {len(chain)} strikes · reference strike {ref_strike:,.0f}" + (f" · timestamp {summary['timestamp']}" if summary["timestamp"] else " · no timestamp supplied"))
 if demo: st.error("DEMO MODE: prices, OI and volume are invented. Paper orders are disabled until you upload a real snapshot.")
 
+if "live_quote_history" not in st.session_state: st.session_state.live_quote_history = []
+if "live_quote_error" not in st.session_state: st.session_state.live_quote_error = ""
+if "live_quote_client" not in st.session_state: st.session_state.live_quote_client = None
+if live_enabled:
+    consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
+    if not consumer_key:
+        st.session_state.live_quote_error = "NEO_CONSUMER_KEY is missing. Add it to your local .env file, restart Streamlit and enable live quotes again."
+    elif not live_token.strip():
+        st.session_state.live_quote_error = "Enter a current Kotak Neo instrument token or index name."
+    else:
+        st_autorefresh(interval=refresh_seconds * 1000, key="kotak_live_quote_refresh")
+        try:
+            if st.session_state.live_quote_client is None:
+                from neo_api_client import NeoAPI
+                st.session_state.live_quote_client = NeoAPI(consumer_key=consumer_key, environment="prod")
+            quote_response = st.session_state.live_quote_client.quotes(
+                instrument_tokens=[{"instrument_token": live_token.strip(), "exchange_segment": live_segment}],
+                quote_type="ltp",
+            )
+            quote = extract_quote(quote_response, live_token.strip())
+            quote["segment"] = live_segment
+            quote["requested_instrument"] = live_token.strip()
+            st.session_state.live_quote_history.append(quote)
+            st.session_state.live_quote_history = st.session_state.live_quote_history[-max_live_points:]
+            st.session_state.live_quote_error = ""
+        except Exception as exc:
+            st.session_state.live_quote_error = f"Kotak Neo quote request failed: {type(exc).__name__}: {exc}"
+else:
+    st.session_state.live_quote_error = ""
+
 if "paper_positions" not in st.session_state: st.session_state.paper_positions = []
 if "paper_orders" not in st.session_state: st.session_state.paper_orders = []
 if "paper_realized" not in st.session_state: st.session_state.paper_realized = 0.0
@@ -93,6 +135,27 @@ if st.session_state.paper_session_date != str(datetime.now().date()):
 
 tabs = st.tabs(["Scalper terminal", "Positions & P&L", "Trade journal"])
 with tabs[0]:
+    st.subheader("Live market chart")
+    if live_enabled:
+        if st.session_state.live_quote_error:
+            st.error(st.session_state.live_quote_error)
+            st.caption("No demo or third-party fallback is used. Check your Kotak Neo API access, exact instrument token and network, then retry.")
+        elif st.session_state.live_quote_history:
+            live_df = pd.DataFrame(st.session_state.live_quote_history)
+            latest = live_df.iloc[-1]
+            lc1, lc2, lc3 = st.columns(3)
+            lc1.metric("Latest live LTP (₹)", f"{float(latest['price']):,.2f}")
+            lc2.metric("Instrument", str(latest.get("symbol", live_token)))
+            lc3.metric("Last quote time", str(latest["timestamp"]).split("T")[-1])
+            live_fig = go.Figure()
+            live_fig.add_trace(go.Scatter(x=live_df["timestamp"], y=live_df["price"], mode="lines+markers", name="Kotak Neo LTP", line=dict(width=2)))
+            live_fig.update_layout(template="plotly_dark", height=390, xaxis_title="Quote time", yaxis_title="Price (₹)", margin=dict(l=10,r=10,t=20,b=10), xaxis=dict(tickangle=-25))
+            st.plotly_chart(live_fig, use_container_width=True)
+            st.caption(f"Polling every {refresh_seconds}s · {len(live_df)} points in this browser session. Each point is a broker quote, not an interpolated price.")
+        else:
+            st.info("Waiting for the first Kotak Neo quote...")
+    else:
+        st.info("Live chart is off. Enable Kotak Neo live quote polling in the sidebar. Uploaded CSV and demo snapshots do not move automatically.")
     a,b,c,d = st.columns(4)
     a.metric("PCR (OI)", f"{summary['pcr_oi']:.2f}" if pd.notna(summary["pcr_oi"]) else "N/A")
     a2 = float(sum(p["net_unrealized"] for p in st.session_state.paper_positions))
