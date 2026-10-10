@@ -78,3 +78,21 @@ A dedicated page now demonstrates candles forming tick by tick, rather than reve
 - An illustrative CE/PE premium path and paper BUY / SELL-CLOSE ticket are provided for practice. Paper P&L is calculated from the synthetic premium path and user-entered quantity.
 - Synthetic prices are not actual NIFTY/option quotes, not a forecast, and not intended for evaluating a strategy's real-world profitability. Use downloaded historical OHLCV replay when you want to study actual past candles.
 - This lab sends no broker orders. Stop-loss and target crossings are warnings; positions are not automatically closed.
+
+## Groww-style single-screen Scalper Desk
+
+Open **Groww Style Scalper Desk** in the Streamlit page navigation for a compact, side-by-side practice layout:
+
+- NIFTY spot candlestick chart with EMA 9/21, plus a CE/PE premium candlestick tab.
+- Select a practice strike, CE or PE, quantity, candle formation duration (15–120 seconds), and refresh interval (1–5 seconds).
+- Paper BUY and SELL/CLOSE ticket beside the chart, stop/target levels, open and realized net P&L, charges estimate, and downloadable trade journal.
+- If synchronized historical files exist in `data/replay/`, the page replays the downloaded spot and option candles. Otherwise it uses explicitly labeled synthetic practice prices.
+- **Historical strike limitation:** the downloader's CE/PE files represent the exact contract recorded in `manifest.csv`; changing the strike selector does not transform those historical prices into another strike. For strike-accurate historical replay, download that strike's own OHLCV first.
+- Synthetic option premiums are illustrative only and do not model Greeks, volatility surface, expiry decay or bid/ask spread. The app sends no real orders.
+
+After pulling, install dependencies and start Streamlit:
+
+    python -m pip install -r requirements.txt
+    python -m streamlit run app.py
+
+Streamlit automatically lists the new desk page in the sidebar navigation.
