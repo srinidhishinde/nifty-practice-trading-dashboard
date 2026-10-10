@@ -9,7 +9,7 @@ import streamlit as st
 import json
 import streamlit.components.v1 as components
 
-def render_candle_chart(frame, title, height=530, candle_seconds=15, volatility=1.0):
+def render_candle_chart(frame, title, height=530, candle_seconds=15, volatility=1.0, scenario="Mixed market"):
     records = frame.tail(100).copy()
     records["timestamp"] = records["timestamp"].astype(str)
     initial = records[["timestamp", "open", "high", "low", "close"]].to_dict(orient="records")
@@ -20,7 +20,7 @@ def render_candle_chart(frame, title, height=530, candle_seconds=15, volatility=
 </div>
 <script>
 const canvas=document.getElementById('chart'), ctx=canvas.getContext('2d');
-let bars=PAYLOAD, tick=0, sec=SECONDS, vol=VOLATILITY;
+let bars=PAYLOAD, tick=0, sec=SECONDS, vol=VOLATILITY, scenario=SCENARIO;
 function resize(){const r=canvas.getBoundingClientRect();canvas.width=Math.max(320,Math.floor(r.width*devicePixelRatio));canvas.height=Math.max(280,Math.floor(r.height*devicePixelRatio));draw();}
 function draw(){
  const w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='#0e1117';ctx.fillRect(0,0,w,h);
@@ -34,14 +34,33 @@ function draw(){
  bars.forEach((b,i)=>{let xx=x(i),yo=y(b.open),yc=y(b.close);let up=b.close>=b.open;ctx.strokeStyle=up?'#26a69a':'#ef5350';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(b.high));ctx.lineTo(xx,y(b.low));ctx.stroke();ctx.fillRect(xx-bw/2,Math.min(yo,yc),bw,Math.max(1*devicePixelRatio,Math.abs(yc-yo)));});
  const last=bars[bars.length-1];ctx.fillStyle='#e8edf2';ctx.font=(12*devicePixelRatio)+'px sans-serif';ctx.fillText('TITLE  ·  '+Number(last.close).toFixed(2),pad.l,15*devicePixelRatio);
 }
+function scenarioDrift(n){
+ if(scenario==='Uptrend with pullbacks') return (Math.floor(n/8)%2===0 ? 0.9 : -0.55);
+ if(scenario==='Downtrend with bounces') return (Math.floor(n/8)%2===0 ? -0.9 : 0.55);
+ if(scenario==='Range / choppy') return Math.sin(n/2.4)*0.75;
+ if(scenario==='Breakout then retest'){const p=n%24;return p<10?1.15:(p<17?-0.75:0.18);}
+ return Math.sin(n/6)*0.45;
+}
 function step(){
- if(vol>0){let b=bars[bars.length-1], delta=(Math.random()-.49)*vol; b.close=Math.max(.05,b.close+delta);b.high=Math.max(b.high,b.close);b.low=Math.min(b.low,b.close);tick++;
- if(tick>=sec){let p=b.close;bars.push({timestamp:new Date().toISOString(),open:p,high:p,low:p,close:p});tick=0;if(bars.length>100)bars.shift();}
- draw();}
+ if(vol<=0)return;
+ const b=bars[bars.length-1];
+ const candleNo=Math.floor(tick/sec);
+ // More visible per-second movement while retaining a continuous OHLC candle.
+ const delta=(scenarioDrift(candleNo)*0.22+(Math.random()-0.5)*0.55)*vol;
+ b.close=Math.max(0.05,b.close+delta);
+ b.high=Math.max(b.high,b.close);b.low=Math.min(b.low,b.close);
+ tick++;
+ if(tick>=sec){
+   const p=b.close;
+   bars.push({timestamp:new Date().toISOString(),open:p,high:p,low:p,close:p});
+   tick=0;
+   if(bars.length>100)bars.shift();
+ }
+ draw();
 }
 window.addEventListener('resize',resize);resize();setInterval(step,1000);
 </script>
-""".replace("HEIGHT", str(int(height))).replace("PAYLOAD", payload).replace("SECONDS", str(max(1,int(candle_seconds)))).replace("VOLATILITY", str(float(volatility))).replace("TITLE", title.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+""".replace("HEIGHT", str(int(height))).replace("PAYLOAD", payload).replace("SECONDS", str(max(1,int(candle_seconds)))).replace("VOLATILITY", str(float(volatility))).replace("SCENARIO", json.dumps(str(scenario))).replace("TITLE", title.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
     components.html(html, height=height, scrolling=False)
 
 
@@ -220,7 +239,7 @@ with left:
         if len(spot_candles) >= 21:
             f.add_trace(go.Scatter(x=spot_candles["timestamp"],y=spot_candles["close"].ewm(span=21,adjust=False).mean(),name="EMA 21"))
         f.update_layout(template="plotly_dark",height=530,xaxis_rangeslider_visible=False,yaxis_title="Index points",margin=dict(l=8,r=8,t=15,b=8),legend=dict(orientation="h",y=1.02),uirevision="desk-spot")
-        render_candle_chart(spot_candles, "NIFTY SPOT", 530, seconds_per_candle, 0.8 if run_sim else 0.0)
+        render_candle_chart(spot_candles, "NIFTY SPOT", 530, seconds_per_candle, 1.0 if (run_sim and data_mode == "SYNTHETIC PRACTICE DATA") else 0.0, scenario)
     with tab_contract:
         f2 = go.Figure(go.Candlestick(x=option_candles["timestamp"],open=option_candles["open"],high=option_candles["high"],low=option_candles["low"],close=option_candles["close"],name=f"{strike} {option_side}"))
         f2.add_hline(y=premium_now,line_dash="dot",annotation_text="Current / replay premium")
@@ -229,7 +248,7 @@ with left:
             f2.add_hline(y=position["stop"],line_dash="dot",annotation_text="Stop")
             f2.add_hline(y=position["target"],line_dash="dot",annotation_text="Target")
         f2.update_layout(template="plotly_dark",height=530,xaxis_rangeslider_visible=False,yaxis_title="Illustrative / replay premium (₹)",margin=dict(l=8,r=8,t=15,b=8),uirevision=f"desk-contract-{option_side}")
-        render_candle_chart(option_candles, f"{strike} {option_side} PREMIUM", 530, seconds_per_candle, 0.04 if run_sim else 0.0)
+        render_candle_chart(option_candles, f"{strike} {option_side} PREMIUM", 530, seconds_per_candle, 0.12 if (run_sim and data_mode == "SYNTHETIC PRACTICE DATA") else 0.0, scenario)
     with st.expander("Practice option chain", expanded=False):
         strikes = list(range(max(22000, int(strike)-500), min(27000, int(strike)+500)+1, 50))
         rows = []
