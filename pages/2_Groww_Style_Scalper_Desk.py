@@ -47,7 +47,7 @@ with control_cols[6]:
 ticks_per_candle = max(2, round(seconds_per_candle / refresh_seconds))
 run_sim = st.toggle("Animate chart", value=True)
 if st.button("Restart practice session", type="secondary"):
-    for k in ["desk_bars", "desk_tick", "desk_premium", "desk_option_bars", "desk_position", "desk_journal", "desk_realized", "desk_rng", "desk_replay_index"]:
+    for k in ["desk_bars", "desk_tick", "desk_premium", "desk_option_bars", "desk_contract_key", "desk_position", "desk_journal", "desk_realized", "desk_rng", "desk_replay_index"]:
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -100,7 +100,7 @@ else:
     rng = st.session_state.desk_rng
     previous = float(bars[-1]["close"])
     tick_in_bar = tick % ticks_per_candle
-    if tick > 0 and tick_in_bar == 0:
+    if run_sim and tick > 0 and tick_in_bar == 0:
         ts = bars[-1]["timestamp"] + timedelta(minutes=int(timeframe.split()[0]))
         bars.append({"timestamp":ts,"open":previous,"high":previous,"low":previous,"close":previous,"volume":0})
     active = bars[-1]
@@ -129,15 +129,19 @@ else:
     st.session_state.desk_bars = bars[-300:]
     spot_candles = pd.DataFrame(st.session_state.desk_bars[-180:])
     # Synthetic option price is deliberately illustrative, not a pricing model.
-    if "desk_premium" not in st.session_state:
-        st.session_state.desk_premium = 180.0
-    premium_move = move * (0.32 if option_side == "CE" else -0.32) + float(rng.normal(0, 0.55))
+    contract_key = f"{int(strike)}_{option_side}"
+    if st.session_state.get("desk_contract_key") != contract_key or "desk_premium" not in st.session_state:
+        # Illustrative strike-distance baseline only; this is not an option pricing model.
+        st.session_state.desk_premium = max(15.0, 180.0 - abs(int(strike) - 25000) * 0.22)
+        st.session_state.desk_contract_key = contract_key
+        st.session_state.desk_option_bars = []
+    premium_move = move * (0.32 if option_side == "CE" else -0.32) + (float(rng.normal(0, 0.55)) if run_sim else 0.0)
     st.session_state.desk_premium = max(0.05, float(st.session_state.desk_premium) + premium_move)
     premium_now = float(st.session_state.desk_premium)
     if "desk_option_bars" not in st.session_state:
         st.session_state.desk_option_bars = []
     opt_bars = st.session_state.desk_option_bars
-    if not opt_bars or tick_in_bar == 0:
+    if not opt_bars or (run_sim and tick_in_bar == 0):
         opt_bars.append({"timestamp": active["timestamp"], "open":premium_now,"high":premium_now,"low":premium_now,"close":premium_now,"volume":0})
     opt = opt_bars[-1]
     opt["close"] = premium_now
