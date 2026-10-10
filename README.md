@@ -1,14 +1,22 @@
-# NIFTY Practice Trading Dashboard
+# NIFTY Options Scalper Dashboard
 
-A standalone Streamlit practice terminal for replaying historical OHLCV at a controlled clock pace, with candlesticks, EMA 9/21, VWAP, RSI, volume, a virtual order ticket, and a downloadable decision journal.
+A standalone Streamlit **NIFTY options-chain analysis and practice dashboard** focused on 1–3 minute scalping workflows. It is not connected to a broker and does not provide live quotes or execute orders.
 
-## Safety and data truth
+## Features
 
-- This is a **historical replay / practice tool**, not a live feed or broker-connected terminal.
-- Without an uploaded CSV it shows clearly labelled illustrative demo data, not real NIFTY prices.
-- Use candle OHLCV with timestamp, open, high, low, close, and volume. Option-chain snapshots are not OHLCV.
-- The practice ticket does not send orders. Option premiums are manually entered; NIFTY index prices are not option prices.
-- It does not promise exchange-grade tick-by-tick replay or fill simulation.
+- Strike-wise CE/PE premium comparison, OI, change in OI, and nearby volume charts.
+- PCR (open interest) summary and reference strike selected from observed spot, if supplied; otherwise explicitly a strike-midpoint proxy.
+- CSV normalization for common option-chain labels.
+- Optional separate NIFTY index OHLCV CSV chart with EMA 9, EMA 21 and VWAP.
+- Demo chain clearly marked as invented example data. Demo data never creates a market bias or trade signal.
+- Download normalized chain for review.
+
+## Important data limits
+
+- **No Kotak Neo authentication, live feed, or order execution is implemented.** Upload a snapshot from a source you trust and check its timestamp before interpreting it.
+- A single option-chain snapshot is not a 1-minute/3-minute option candle. For premium candles, use real contract OHLCV or multiple timestamped snapshots per strike.
+- OI, PCR, and volume alone do not justify buying CE or PE. Confirm with underlying price action, spread/liquidity, freshness, expiry and risk rules.
+- Never use illustrative demo prices for trading decisions.
 
 ## Run on Windows PowerShell
 
@@ -20,21 +28,15 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-Open the local URL printed by Streamlit (usually `http://localhost:8501`).
+Open the localhost URL printed by Streamlit, usually http://localhost:8501.
 
-## CSV format
+## Option-chain CSV
 
-```csv
-timestamp,open,high,low,close,volume
-2026-10-08 09:15:00,25000,25010,24995,25005,12000
-2026-10-08 09:16:00,25005,25012,25001,25008,11800
-```
+At minimum, include a strike column. To see the full analysis, include fields such as CE LTP, PE LTP, CE OI, PE OI, CE Change in OI, PE Change in OI, CE Volume, and PE Volume. Common variants such as "Strike Price", "Call LTP", "Put LTP", "CE Chg in OI" and "PE Chg in OI" are normalized. Exact headings depend on the export source.
 
-Keep timestamps consistent in one timezone (preferably Asia/Kolkata). Use genuine historical candles. Coarser source candles cannot be turned into genuine finer candles; the app rejects some impossible downsampling cases.
+## NIFTY underlying OHLCV CSV
 
-## Replay clock
-
-At 1×, the first available candle is shown at start, and the next candle is revealed only after the selected timeframe interval has elapsed. 2×/5×/10× are optional accelerated practice modes. Pause and reset are available. Replay timing uses a monotonic elapsed clock rather than the PC wall-clock time.
+Use a separate CSV with `timestamp,open,high,low,close,volume`. Do not treat an option-chain snapshot as OHLCV.
 
 ## Tests
 
@@ -42,11 +44,4 @@ At 1×, the first available candle is shown at start, and the next candle is rev
 python -m pytest -q
 ```
 
-The included test suite currently has six tests covering CSV normalization, invalid candle rejection, resampling, replay timing, and indicator output.
-
-## Limitations / next steps
-
-- The journal exists in the current browser session and is not persisted across app restarts.
-- Replay bar timestamps are historical timestamps; the replay clock controls when bars become visible.
-- A realistic CE/PE simulator needs historical option candle data per contract, expiry/strike mapping, lot sizes, brokerage, spread, and a conservative fill model.
-- No live data, broker connection, or order execution is implemented.
+The option-chain helper tests cover common header normalization, numeric commas, missing strikes, duplicate strikes, PCR calculation, reference strike selection, and demo-data safeguards. The original replay helper tests remain in the repository.
