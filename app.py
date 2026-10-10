@@ -223,6 +223,100 @@ if st.session_state.paper_session_date != str(datetime.now().date()):
     st.session_state.paper_session_date = str(datetime.now().date())
     st.session_state.paper_realized = 0.0
 
+# Full-width option chart workspace. Opened from the strike picker below.
+if "chart_workspace" not in st.session_state:
+    st.session_state.chart_workspace = False
+if "workspace_strike" not in st.session_state:
+    st.session_state.workspace_strike = float(ref_strike)
+if "workspace_side" not in st.session_state:
+    st.session_state.workspace_side = "CE"
+
+if st.session_state.chart_workspace:
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"] {display:none}
+    .block-container {max-width: 100% !important; padding-top: .4rem !important}
+    </style>
+    """, unsafe_allow_html=True)
+    ws_strike = float(st.session_state.workspace_strike)
+    ws_side = st.session_state.workspace_side
+    ws_contract = f"NIFTY {ws_strike:,.0f} {ws_side}"
+    ws_price = float(replay_current_price)
+    if sync_replay_data is not None:
+        ws_price = float(sync_replay_data.iloc[replay_index]["ce_close" if ws_side == "CE" else "pe_close"])
+    else:
+        ws_row = chain.loc[chain["strike"] == ws_strike]
+        ws_col = "ce_ltp" if ws_side == "CE" else "pe_ltp"
+        if not ws_row.empty and pd.notna(ws_row.iloc[0][ws_col]) and not replay_enabled:
+            ws_price = float(ws_row.iloc[0][ws_col])
+    top_back, top_name, top_price = st.columns([1, 4, 2])
+    with top_back:
+        if st.button("← Option chain", use_container_width=True):
+            st.session_state.chart_workspace = False
+            st.rerun()
+    with top_name:
+        st.title(f"{ws_contract} · Scalper chart")
+        st.caption("FULL-WIDTH PRACTICE WORKSPACE · PAPER ORDERS ONLY")
+    with top_price:
+        st.metric("Current replay premium", f"₹{ws_price:,.2f}")
+    if replay_enabled:
+        ws_visible = replay_candles.iloc[:replay_index+1].tail(180)
+        ws_fig = go.Figure(data=[go.Candlestick(x=ws_visible["timestamp"],open=ws_visible["open"],high=ws_visible["high"],low=ws_visible["low"],close=ws_visible["close"],name=ws_contract)])
+        if len(ws_visible) >= 9:
+            ws_fig.add_trace(go.Scatter(x=ws_visible["timestamp"],y=ws_visible["close"].ewm(span=9,adjust=False).mean(),name="EMA 9"))
+        if len(ws_visible) >= 21:
+            ws_fig.add_trace(go.Scatter(x=ws_visible["timestamp"],y=ws_visible["close"].ewm(span=21,adjust=False).mean(),name="EMA 21"))
+        ws_fig.update_layout(template="plotly_dark",height=620,xaxis_rangeslider_visible=False,xaxis_title="Replay timestamp",yaxis_title="Premium (₹)",margin=dict(l=10,r=10,t=20,b=10),legend=dict(orientation="h",y=1.02))
+        st.plotly_chart(ws_fig,use_container_width=True)
+        st.caption(f"Source: {replay_source}. " + ("Real historical candles replayed in sequence." if sync_replay_data is not None else "Synthetic prices are invented for practice and are not actual market prices."))
+    else:
+        st.warning("Replay is paused. Enable Animate simulated market in the sidebar before opening the chart workspace.")
+    if st.session_state.paper_positions:
+        for pos in st.session_state.paper_positions:
+            if pos["instrument"] == ws_contract:
+                pos["mark"] = ws_price
+                pos["gross_unrealized"] = pnl_for_long(pos["entry"], ws_price, pos["quantity"])
+                pos["net_unrealized"] = pos["gross_unrealized"] - pos["entry_charge"] - float(charge_per_order)
+    ticket_a, ticket_b, ticket_c, ticket_d = st.columns(4)
+    ticket_a.metric("Quantity", f"{int(lots*lot_size)} units")
+    ticket_b.metric("Realized P&L", f"₹{st.session_state.paper_realized:,.2f}")
+    active_ws = next((p for p in st.session_state.paper_positions if p["instrument"] == ws_contract), None)
+    ticket_c.metric("Open P&L", f"₹{active_ws.get('net_unrealized',0):,.2f}" if active_ws else "₹0.00")
+    ticket_d.metric("Estimated round-trip charges", f"₹{2*charge_per_order:,.2f}")
+    entry_col, sl_col, target_col, action_col = st.columns([1.1,1,1,1.2])
+    with entry_col:
+        ws_entry = st.number_input("Entry premium (₹)",min_value=0.0,value=float(ws_price),step=0.05,format="%.2f",key="ws_entry")
+    with sl_col:
+        ws_sl = st.number_input("Stop loss (₹)",min_value=0.0,value=round(max(0.05,ws_price*0.85),2),step=0.05,format="%.2f",key="ws_sl")
+    with target_col:
+        ws_target = st.number_input("Target (₹)",min_value=0.0,value=round(ws_price*1.20,2),step=0.05,format="%.2f",key="ws_target")
+    with action_col:
+        st.write("")
+        st.write("")
+        if st.button("BUY",type="primary",use_container_width=True,disabled=ws_entry<=0 or active_ws is not None):
+            if max_loss > 0 and st.session_state.paper_realized <= -max_loss:
+                st.error("Daily practice loss limit reached; new entries blocked.")
+            elif ws_sl >= ws_entry or ws_target <= ws_entry:
+                st.error("For a long CE/PE practice trade, stop loss must be below entry and target must be above entry.")
+            else:
+                pos={"id":len(st.session_state.paper_orders)+1,"instrument":ws_contract,"side":"LONG","strike":ws_strike,"option_side":ws_side,"quantity":int(lots*lot_size),"lots":int(lots),"entry":float(ws_entry),"mark":float(ws_price),"entry_charge":float(charge_per_order),"stop_loss":float(ws_sl),"target":float(ws_target),"entry_time":datetime.now().isoformat(timespec="seconds"),"gross_unrealized":0.0,"net_unrealized":-float(charge_per_order)}
+                st.session_state.paper_positions.append(pos)
+                st.session_state.paper_orders.append({"time":pos["entry_time"],"action":"PAPER BUY","instrument":ws_contract,"quantity":pos["quantity"],"price":float(ws_entry),"gross_pnl":0.0,"charges":float(charge_per_order),"net_pnl":-float(charge_per_order),"status":"OPEN"})
+                st.success("Paper BUY opened. No real broker order was sent.")
+                st.rerun()
+    sell_col, open_col = st.columns([1,3])
+    with sell_col:
+        if st.button("SELL / CLOSE",use_container_width=True,disabled=active_ws is None):
+            result=close_long(active_ws["entry"],ws_price,active_ws["quantity"],active_ws["entry_charge"],float(charge_per_order))
+            st.session_state.paper_realized += result["net_pnl"]
+            st.session_state.paper_orders.append({"time":datetime.now().isoformat(timespec="seconds"),"action":"PAPER SELL / CLOSE","instrument":ws_contract,"quantity":active_ws["quantity"],"price":ws_price,"gross_pnl":result["gross_pnl"],"charges":result["charges"],"net_pnl":result["net_pnl"],"status":"CLOSED"})
+            st.session_state.paper_positions=[p for p in st.session_state.paper_positions if p["id"] != active_ws["id"]]
+            st.success(f"Practice position closed. Net P&L ₹{result['net_pnl']:,.2f}")
+            st.rerun()
+    with open_col:
+        st.caption("BUY opens a simulated long option position. SELL/CLOSE exits it. This is paper practice, not exchange execution.")
+    st.stop()
+
 tabs = st.tabs(["Scalper terminal", "Positions & P&L", "Trade journal"])
 with tabs[0]:
     st.subheader("Practice market chart")
@@ -279,11 +373,33 @@ with tabs[0]:
     d.metric("Open net P&L", f"₹{a2:,.2f}")
     chart_col, ticket_col = st.columns([1.55, 1])
     with chart_col:
-        st.subheader("Option contract view")
-        side = st.radio("Contract side", ["CE / Call", "PE / Put"], horizontal=True)
+        st.subheader("Option chain · tap a strike to open the full-width chart")
         strikes = [float(replay_strike)] if sync_replay_data is not None and replay_strike is not None else nearby["strike"].astype(float).tolist()
         default_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i]-ref_strike))
-        strike = st.selectbox("Strike", strikes, index=default_idx, format_func=lambda x: f"{x:,.0f}")
+        chain_strike = st.selectbox("Strike price", strikes, index=default_idx, format_func=lambda x: f"{x:,.0f}", key="chain_strike_picker")
+        chain_row = chain.loc[chain["strike"] == chain_strike]
+        if chain_row.empty:
+            chain_row = chain.iloc[[(chain["strike"]-chain_strike).abs().argmin()]]
+        row = chain_row.iloc[0]
+        chain_cols = st.columns([1.2,1,1,1,1])
+        for col, label in zip(chain_cols, ["Strike","CE LTP","PE LTP","CE chart","PE chart"]):
+            col.markdown(f"**{label}**")
+        row_cols = st.columns([1.2,1,1,1,1])
+        row_cols[0].write(f"{chain_strike:,.0f}")
+        row_cols[1].write(f"₹{float(row['ce_ltp']):,.2f}" if pd.notna(row["ce_ltp"]) else "N/A")
+        row_cols[2].write(f"₹{float(row['pe_ltp']):,.2f}" if pd.notna(row["pe_ltp"]) else "N/A")
+        if row_cols[3].button("Open CE", key=f"open_ce_{chain_strike}",use_container_width=True):
+            st.session_state.workspace_strike=float(chain_strike)
+            st.session_state.workspace_side="CE"
+            st.session_state.chart_workspace=True
+            st.rerun()
+        if row_cols[4].button("Open PE", key=f"open_pe_{chain_strike}",use_container_width=True):
+            st.session_state.workspace_strike=float(chain_strike)
+            st.session_state.workspace_side="PE"
+            st.session_state.chart_workspace=True
+            st.rerun()
+        side = st.radio("Contract side", ["CE / Call", "PE / Put"], horizontal=True)
+        strike = chain_strike
         price_col = "ce_ltp" if side.startswith("CE") else "pe_ltp"
         chosen_rows = chain.loc[chain["strike"] == strike]
         chosen = chosen_rows.iloc[-1] if not chosen_rows.empty else chain.iloc[(chain["strike"] - strike).abs().argmin()]
