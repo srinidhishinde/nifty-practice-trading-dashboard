@@ -67,3 +67,14 @@ The app joins the three datasets by timestamp, so the replay cursor moves across
 - A practice BUY opens a simulated long option position; SELL / CLOSE records the simulated exit and net P&L. It does not send any broker order.
 - The workspace follows the selected replay price. When synchronized Kotak historical data is installed, CE/PE replay prices come from the downloaded historical contracts. Otherwise the fallback is explicitly synthetic.
 - Stop loss and target are shown as order-ticket levels. Check them and use SELL / CLOSE to exit; automated stop/target fills are not guaranteed by this UI.
+
+
+## Candle Movement Lab (synthetic practice)
+
+A dedicated page now demonstrates candles forming tick by tick, rather than revealing only completed historical candles. Open the Streamlit app and choose **Candle Movement Lab** from the multipage navigation.
+
+- The active synthetic NIFTY candle updates its close, high, low and volume on each refresh, then a new candle begins after the configured number of ticks.
+- Choose 1-, 2-, 3- or 5-minute candle labels, an intrabar update rate, and a price-action scenario (uptrend/pullbacks, downtrend/bounces, range, breakout/retest, or mixed).
+- An illustrative CE/PE premium path and paper BUY / SELL-CLOSE ticket are provided for practice. Paper P&L is calculated from the synthetic premium path and user-entered quantity.
+- Synthetic prices are not actual NIFTY/option quotes, not a forecast, and not intended for evaluating a strategy's real-world profitability. Use downloaded historical OHLCV replay when you want to study actual past candles.
+- This lab sends no broker orders. Stop-loss and target crossings are warnings; positions are not automatically closed.
