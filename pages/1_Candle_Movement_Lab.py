@@ -22,9 +22,9 @@ st.warning("This lab generates synthetic price paths so you can practise reading
 with st.sidebar:
     st.header("Simulation controls")
     timeframe = st.selectbox("Candle timeframe", ["1 minute", "2 minutes", "3 minutes", "5 minutes"], index=0)
-    seconds_per_candle = st.slider("Seconds for each simulated candle", 5, 30, 10)
-    ticks_per_candle = st.slider("Candle updates (ticks)", 5, 20, 10)
-    speed = st.slider("Animation refresh (seconds)", 1, 3, 1)
+    seconds_per_candle = st.slider("Real-time seconds to form one candle", 15, 120, 60, step=5, help="Slower settings let you watch the current candle develop instead of rapidly cycling through candles.")
+    speed = st.slider("Chart refresh (seconds)", 1, 5, 2, help="How often the active candle updates. Choose 2–5 seconds for calmer movement.")
+    ticks_per_candle = max(2, round(seconds_per_candle / speed))
     scenario = st.selectbox("Price-action scenario", ["Mixed market", "Uptrend with pullbacks", "Downtrend with bounces", "Range / choppy", "Breakout then retest"])
     option_side = st.radio("Practice contract", ["CE", "PE"], horizontal=True)
     strike = st.number_input("Practice strike (illustrative)", min_value=1000, max_value=100000, value=25000, step=50)
@@ -76,7 +76,7 @@ elif scenario == "Downtrend with bounces": drift_tick = -0.055 if (bar_number //
 elif scenario == "Range / choppy": drift_tick = 0.0
 elif scenario == "Breakout then retest": drift_tick = 0.09 if bar_number % 12 < 7 else (-0.06 if bar_number % 12 < 10 else 0.015)
 else: drift_tick = [0.03, -0.01, 0.0, -0.035, 0.045, 0.01][(bar_number // 5) % 6]
-move = drift_tick + float(rng.normal(0, 0.20))
+move = (drift_tick * (10 / ticks_per_candle)) + float(rng.normal(0, 0.10 * (10 / ticks_per_candle) ** 0.5))
 new_price = max(100.0, float(active["close"]) + move)
 active["close"] = new_price
 active["high"] = max(float(active["high"]), new_price)
@@ -92,7 +92,7 @@ underlying_move = new_price - start_spot
 # Illustrative premium path: a small delta-like response plus random volatility.
 base_premium = 180.0
 if "sim_premium" not in st.session_state: st.session_state.sim_premium = base_premium
-premium_change = (move * (0.45 if option_side == "CE" else -0.45)) + float(rng.normal(0, 0.18))
+premium_change = (move * (0.30 if option_side == "CE" else -0.30)) + float(rng.normal(0, 0.08))
 st.session_state.sim_premium = max(0.05, float(st.session_state.sim_premium) + premium_change)
 premium = float(st.session_state.sim_premium)
 
@@ -113,7 +113,7 @@ if len(frame) >= 21:
     fig.add_trace(go.Scatter(x=frame["timestamp"], y=frame["close"].ewm(span=21, adjust=False).mean(), name="EMA 21"))
 fig.update_layout(template="plotly_dark", height=560, xaxis_rangeslider_visible=False, yaxis_title="Simulated index points", margin=dict(l=8,r=8,t=18,b=8), uirevision="candle-lab")
 st.plotly_chart(fig, use_container_width=True)
-st.caption(f"Tick {tick_in_bar + 1}/{ticks_per_candle} of the active {timeframe} candle · refresh every {speed}s · simulated only.")
+st.caption(f"Active {timeframe} candle · update {tick_in_bar + 1}/{ticks_per_candle} · refresh every {speed}s · one candle forms over about {seconds_per_candle}s · simulated only.")
 
 st.subheader(f"{option_side} premium practice chart")
 premium_history = st.session_state.get("sim_premium_history", [])
