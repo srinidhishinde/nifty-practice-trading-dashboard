@@ -260,13 +260,19 @@ if st.session_state.chart_workspace:
     with top_price:
         st.metric("Current replay premium", f"₹{ws_price:,.2f}")
     if replay_enabled:
-        ws_visible = replay_candles.iloc[:replay_index+1].tail(180)
+        # Keep the selected option's own OHLC candles moving; do not show CE candles on a PE chart.
+        if sync_replay_data is not None:
+            ws_prefix = "ce" if ws_side == "CE" else "pe"
+            ws_chart_candles = sync_replay_data[["timestamp", f"{ws_prefix}_open", f"{ws_prefix}_high", f"{ws_prefix}_low", f"{ws_prefix}_close", f"{ws_prefix}_volume"]].rename(columns={f"{ws_prefix}_open":"open", f"{ws_prefix}_high":"high", f"{ws_prefix}_low":"low", f"{ws_prefix}_close":"close", f"{ws_prefix}_volume":"volume"})
+        else:
+            ws_chart_candles = replay_candles
+        ws_visible = ws_chart_candles.iloc[:replay_index+1].tail(180)
         ws_fig = go.Figure(data=[go.Candlestick(x=ws_visible["timestamp"],open=ws_visible["open"],high=ws_visible["high"],low=ws_visible["low"],close=ws_visible["close"],name=ws_contract)])
         if len(ws_visible) >= 9:
             ws_fig.add_trace(go.Scatter(x=ws_visible["timestamp"],y=ws_visible["close"].ewm(span=9,adjust=False).mean(),name="EMA 9"))
         if len(ws_visible) >= 21:
             ws_fig.add_trace(go.Scatter(x=ws_visible["timestamp"],y=ws_visible["close"].ewm(span=21,adjust=False).mean(),name="EMA 21"))
-        ws_fig.update_layout(template="plotly_dark",height=620,xaxis_rangeslider_visible=False,xaxis_title="Replay timestamp",yaxis_title="Premium (₹)",margin=dict(l=10,r=10,t=20,b=10),legend=dict(orientation="h",y=1.02))
+        ws_fig.update_layout(template="plotly_dark",height=680,xaxis_rangeslider_visible=False,xaxis_title="Replay timestamp",yaxis_title="Premium (₹)",margin=dict(l=10,r=10,t=20,b=10),legend=dict(orientation="h",y=1.02),uirevision=ws_contract)
         st.plotly_chart(ws_fig,use_container_width=True)
         st.caption(f"Source: {replay_source}. " + ("Real historical candles replayed in sequence." if sync_replay_data is not None else "Synthetic prices are invented for practice and are not actual market prices."))
     else:
