@@ -11,6 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 from live_market import extract_quote
 from chain_utils import normalize_option_chain, summarize_chain, scalping_context
 from paper_trading import pnl_for_long, close_long
+from replay_data import load_synchronized_replay
 
 load_dotenv()
 st.set_page_config(page_title="NIFTY Scalper Practice", page_icon="📈", layout="wide")
@@ -180,6 +181,17 @@ except Exception as exc:
     st.sidebar.error(f"Replay CSV error: {exc}")
     replay_candles = make_demo_replay()
 
+sync_replay_data = None
+replay_strike = None
+if replay_file is None:
+    try:
+        sync_replay_data, replay_strike = load_synchronized_replay()
+        if sync_replay_data is not None:
+            replay_candles = sync_replay_data[["timestamp", "ce_open", "ce_high", "ce_low", "ce_close", "ce_volume"]].rename(columns={"ce_open":"open","ce_high":"high","ce_low":"low","ce_close":"close","ce_volume":"volume"})
+            replay_source = "KOTAK HISTORICAL SYNCHRONIZED SPOT + CE + PE"
+    except Exception as exc:
+        st.sidebar.warning(f"Could not auto-load downloaded backdata: {exc}")
+
 replay_fingerprint = f"{replay_source}:{len(replay_candles)}:{str(replay_candles.iloc[0]['timestamp'])}"
 if st.session_state.get("replay_fingerprint") != replay_fingerprint:
     st.session_state.replay_fingerprint = replay_fingerprint
@@ -216,13 +228,23 @@ with tabs[0]:
     st.subheader("Practice market chart")
     if replay_enabled:
         r1,r2,r3 = st.columns(3)
-        r1.metric("Simulated / replay premium (₹)", f"{replay_current_price:,.2f}")
+        r1.metric("Replay premium (₹)", f"{replay_current_price:,.2f}")
         r2.metric("Replay candle", f"{replay_index+1:,} / {len(replay_candles):,}")
-        r3.metric("Replay source", "Historical CSV" if replay_is_historical else "Synthetic demo")
-        replay_fig = go.Figure(data=[go.Candlestick(x=replay_visible["timestamp"],open=replay_visible["open"],high=replay_visible["high"],low=replay_visible["low"],close=replay_visible["close"],name="Practice premium")])
-        replay_fig.update_layout(template="plotly_dark",height=430,xaxis_rangeslider_visible=False,xaxis_title="Replay time",yaxis_title="Option premium (₹)",margin=dict(l=10,r=10,t=20,b=10))
-        st.plotly_chart(replay_fig,use_container_width=True)
-        st.caption(f"{replay_source}. Candles advance every {replay_speed} second(s). Historical CSV replays past prices; synthetic mode is generated practice data, not market data.")
+        r3.metric("Data source", "Kotak historical" if sync_replay_data is not None else "Historical CSV" if replay_is_historical else "Synthetic demo")
+        if sync_replay_data is not None:
+            aligned_visible = sync_replay_data.iloc[:replay_index+1].tail(120)
+            spot_col, ce_col, pe_col = st.columns(3)
+            for target, prefix, title, ytitle in [(spot_col,"spot","NIFTY spot","Index (₹)"),(ce_col,"ce","ATM CE premium","Premium (₹)"),(pe_col,"pe","ATM PE premium","Premium (₹)")]:
+                with target:
+                    chart = go.Figure(data=[go.Candlestick(x=aligned_visible["timestamp"],open=aligned_visible[f"{prefix}_open"],high=aligned_visible[f"{prefix}_high"],low=aligned_visible[f"{prefix}_low"],close=aligned_visible[f"{prefix}_close"],name=title)])
+                    chart.update_layout(template="plotly_dark",height=330,title=title,xaxis_rangeslider_visible=False,yaxis_title=ytitle,margin=dict(l=5,r=5,t=35,b=5))
+                    st.plotly_chart(chart,use_container_width=True)
+            st.caption(f"Historical Kotak Neo candles. Spot, CE and PE share the same timestamps; replay advances every {replay_speed} second(s).")
+        else:
+            replay_fig = go.Figure(data=[go.Candlestick(x=replay_visible["timestamp"],open=replay_visible["open"],high=replay_visible["high"],low=replay_visible["low"],close=replay_visible["close"],name="Practice premium")])
+            replay_fig.update_layout(template="plotly_dark",height=430,xaxis_rangeslider_visible=False,xaxis_title="Replay time",yaxis_title="Option premium (₹)",margin=dict(l=10,r=10,t=20,b=10))
+            st.plotly_chart(replay_fig,use_container_width=True)
+            st.caption(f"{replay_source}. Candles advance every {replay_speed} second(s). Historical CSV replays past prices; synthetic mode is generated practice data, not market data.")
         if st.button("Restart practice replay"):
             st.session_state.replay_start_counter = replay_counter
             st.rerun()
@@ -259,16 +281,20 @@ with tabs[0]:
     with chart_col:
         st.subheader("Option contract view")
         side = st.radio("Contract side", ["CE / Call", "PE / Put"], horizontal=True)
-        strikes = nearby["strike"].astype(float).tolist()
+        strikes = [float(replay_strike)] if sync_replay_data is not None and replay_strike is not None else nearby["strike"].astype(float).tolist()
         default_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i]-ref_strike))
         strike = st.selectbox("Strike", strikes, index=default_idx, format_func=lambda x: f"{x:,.0f}")
         price_col = "ce_ltp" if side.startswith("CE") else "pe_ltp"
-        chosen = chain.loc[chain["strike"] == strike].iloc[-1]
+        chosen_rows = chain.loc[chain["strike"] == strike]
+        chosen = chosen_rows.iloc[-1] if not chosen_rows.empty else chain.iloc[(chain["strike"] - strike).abs().argmin()]
         chain_ltp = chosen[price_col]
         current_ltp = float(chain_ltp) if pd.notna(chain_ltp) else 0.0
         # In practice replay mode, the selected contract follows the replayed option-premium candle.
         if replay_enabled:
-            current_ltp = replay_current_price
+            if sync_replay_data is not None:
+                current_ltp = float(sync_replay_data.iloc[replay_index]["ce_close" if side.startswith("CE") else "pe_close"])
+            else:
+                current_ltp = replay_current_price
         st.session_state["selected_replay_instrument"] = f"NIFTY {int(strike)} {'CE' if side.startswith('CE') else 'PE'}"
         st.session_state["selected_replay_price"] = current_ltp
         st.metric("Current practice premium (₹)", f"{current_ltp:,.2f}" if current_ltp > 0 else "Unavailable")
