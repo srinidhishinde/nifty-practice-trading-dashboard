@@ -59,3 +59,11 @@ The app joins the three datasets by timestamp, so the replay cursor moves across
 ## Run tests
 
     python -m pytest -q
+
+## Full-width option-chain chart workspace
+
+- Select a strike in the Scalper terminal and choose **Open CE** or **Open PE** to open a full-width chart workspace.
+- The workspace includes a premium candlestick chart, EMA 9/21 overlays, entry premium, stop-loss, target, quantity and BUY / SELL-CLOSE paper controls.
+- A practice BUY opens a simulated long option position; SELL / CLOSE records the simulated exit and net P&L. It does not send any broker order.
+- The workspace follows the selected replay price. When synchronized Kotak historical data is installed, CE/PE replay prices come from the downloaded historical contracts. Otherwise the fallback is explicitly synthetic.
+- Stop loss and target are shown as order-ticket levels. Check them and use SELL / CLOSE to exit; automated stop/target fills are not guaranteed by this UI.
