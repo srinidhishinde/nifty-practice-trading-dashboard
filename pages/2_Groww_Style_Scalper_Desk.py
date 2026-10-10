@@ -262,7 +262,7 @@ def render_dashboard():
         st.subheader("Paper order ticket")
         st.caption("Long CE/PE practice · no broker orders")
         entry_default = round(float(premium_now), 2)
-        entry = st.number_input("Entry premium (₹)",min_value=0.05,value=entry_default,step=0.05,format="%.2f",key="desk_entry")
+        st.metric("Current entry premium (BUY captures this price)", f"₹{entry_default:,.2f}")
         stop = st.number_input("Stop loss (₹)",min_value=0.05,value=round(max(0.05,entry_default*0.85),2),step=0.05,format="%.2f",key="desk_stop")
         target = st.number_input("Target (₹)",min_value=0.10,value=round(entry_default*1.20,2),step=0.05,format="%.2f",key="desk_target")
         charges_per_side = st.number_input("Estimated charges / side (₹)",min_value=0.0,value=20.0,step=1.0,key="desk_charges")
@@ -278,12 +278,14 @@ def render_dashboard():
         buy, close = st.columns(2)
         with buy:
             if st.button("BUY PAPER",type="primary",use_container_width=True,disabled=position is not None):
-                if not (stop < entry < target):
-                    st.error("For a long-option practice trade, stop loss must be below entry and target above entry.")
-                else:
-                    st.session_state.desk_position = {"instrument":f"NIFTY {int(strike)} {option_side}","strike":int(strike),"option_side":option_side,"entry":float(entry),"stop":float(stop),"target":float(target),"quantity":int(quantity),"entry_charge":float(charges_per_side),"exit_charge_estimate":float(charges_per_side),"opened_at":datetime.now().isoformat(timespec="seconds")}
-                    st.session_state.desk_journal.append({"time":datetime.now().isoformat(timespec="seconds"),"action":"BUY PAPER","instrument":f"NIFTY {int(strike)} {option_side}","quantity":int(quantity),"price":float(entry),"charges":float(charges_per_side),"net_pnl":-float(charges_per_side)})
-                    st.rerun()
+                # Fill at the current displayed simulated/replay premium at the moment BUY is clicked.
+                entry = round(float(premium_now), 2)
+                # If saved SL/target values no longer bracket the current premium, derive fresh defaults.
+                effective_stop = float(stop) if float(stop) < entry else round(max(0.05, entry * 0.85), 2)
+                effective_target = float(target) if float(target) > entry else round(entry * 1.20, 2)
+                st.session_state.desk_position = {"instrument":f"NIFTY {int(strike)} {option_side}","strike":int(strike),"option_side":option_side,"entry":entry,"stop":effective_stop,"target":effective_target,"quantity":int(quantity),"entry_charge":float(charges_per_side),"exit_charge_estimate":float(charges_per_side),"opened_at":datetime.now().isoformat(timespec="seconds")}
+                st.session_state.desk_journal.append({"time":datetime.now().isoformat(timespec="seconds"),"action":"BUY PAPER","instrument":f"NIFTY {int(strike)} {option_side}","quantity":int(quantity),"price":entry,"charges":float(charges_per_side),"net_pnl":-float(charges_per_side)})
+                st.rerun()
         with close:
             if st.button("SELL / CLOSE",use_container_width=True,disabled=position is None):
                 gross = (premium_now - position["entry"]) * position["quantity"]
