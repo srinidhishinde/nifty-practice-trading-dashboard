@@ -70,7 +70,7 @@ def render_dashboard():
     st.warning("Data mode is shown explicitly below. Synthetic prices are for learning candle behaviour only; they are not live NIFTY/option quotes or a trading signal.")
 
     # ---------- Controls ----------
-    control_cols = st.columns([1.1, 1, 1, 1, 1.2, 1.2, 1.35])
+    control_cols = st.columns([1.1, 1, 1, 1, 1.2, 1.35])
     with control_cols[0]:
         timeframe = st.selectbox("Candle timeframe", ["1 min", "2 min", "3 min", "5 min"], index=2)
     with control_cols[1]:
@@ -82,11 +82,10 @@ def render_dashboard():
     with control_cols[4]:
         seconds_per_candle = st.select_slider("Seconds per candle", options=[15, 20, 30, 45, 60, 90, 120], value=15)
     with control_cols[5]:
-        refresh_seconds = st.select_slider("Candle movement refresh", options=[1, 2, 3, 4, 5], value=1)
-    with control_cols[6]:
         scenario = st.selectbox("Price behaviour", ["Mixed market", "Uptrend with pullbacks", "Downtrend with bounces", "Range / choppy", "Breakout then retest"], index=0)
 
-    ticks_per_candle = max(1, round(seconds_per_candle / refresh_seconds))
+    # Fragment reruns every second, so candle duration is measured in seconds directly.
+    ticks_per_candle = max(1, int(seconds_per_candle))
     run_sim = st.toggle("Animate chart", value=True)
     if st.button("Restart practice session", type="secondary"):
         for k in ["desk_bars", "desk_tick", "desk_premium", "desk_option_bars", "desk_contract_key", "desk_position", "desk_journal", "desk_realized", "desk_rng", "desk_replay_index"]:
