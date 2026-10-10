@@ -1,5 +1,8 @@
 streamlit>=1.35
+streamlit-autorefresh>=1.0.1
 pandas>=2.0
 numpy>=1.24
 plotly>=5.20
 pytest>=8.0
+python-dotenv>=1.0
+kotakneoapi>=3.0.7
