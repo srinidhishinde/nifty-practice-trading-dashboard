@@ -28,24 +28,26 @@ st.caption("Groww-inspired practice layout · PAPER ORDERS ONLY · NO BROKER ORD
 st.warning("Data mode is shown explicitly below. Synthetic prices are for learning candle behaviour only; they are not live NIFTY/option quotes or a trading signal.")
 
 # ---------- Controls ----------
-control_cols = st.columns([1.1, 1, 1, 1, 1.2, 1.2])
+control_cols = st.columns([1.1, 1, 1, 1, 1.2, 1.2, 1.35])
 with control_cols[0]:
     timeframe = st.selectbox("Candle timeframe", ["1 min", "2 min", "3 min", "5 min"], index=2)
 with control_cols[1]:
     option_side = st.radio("Contract", ["CE", "PE"], horizontal=True, key="desk_side")
 with control_cols[2]:
-    strike = st.selectbox("Practice strike", list(range(22000, 27001, 50)), index=(25000-22000)//50)
+    strike = st.selectbox("Practice strike", list(range(22000, 27001, 50)), index=(25000-22000)//50, key="desk_strike_selector")
 with control_cols[3]:
     quantity = st.number_input("Quantity", min_value=1, max_value=10000, value=65, step=1)
 with control_cols[4]:
     seconds_per_candle = st.select_slider("Seconds per candle", options=[15, 20, 30, 45, 60, 90, 120], value=60)
 with control_cols[5]:
     refresh_seconds = st.select_slider("Refresh rate", options=[1, 2, 3, 4, 5], value=2)
+with control_cols[6]:
+    scenario = st.selectbox("Price behaviour", ["Mixed market", "Uptrend with pullbacks", "Downtrend with bounces", "Range / choppy", "Breakout then retest"], index=0)
 
 ticks_per_candle = max(2, round(seconds_per_candle / refresh_seconds))
 run_sim = st.toggle("Animate chart", value=True)
 if st.button("Restart practice session", type="secondary"):
-    for k in ["desk_bars", "desk_tick", "desk_premium", "desk_position", "desk_journal", "desk_realized", "desk_rng", "desk_replay_index"]:
+    for k in ["desk_bars", "desk_tick", "desk_premium", "desk_option_bars", "desk_position", "desk_journal", "desk_realized", "desk_rng", "desk_replay_index"]:
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -104,13 +106,26 @@ else:
     active = bars[-1]
     # A small index-point move per refresh keeps the forming candle calm and readable.
     drift = 0.55 * np.sin((tick // ticks_per_candle) / 7)
-    move = drift / ticks_per_candle + float(rng.normal(0, 1.8 / np.sqrt(ticks_per_candle)))
+    scenario_tick = tick // ticks_per_candle
+    if scenario == "Uptrend with pullbacks":
+        scenario_drift = 1.0 if (scenario_tick % 9) < 6 else -0.8
+    elif scenario == "Downtrend with bounces":
+        scenario_drift = -1.0 if (scenario_tick % 9) < 6 else 0.8
+    elif scenario == "Range / choppy":
+        scenario_drift = 0.7 * np.sin(scenario_tick / 2.5)
+    elif scenario == "Breakout then retest":
+        phase = scenario_tick % 24
+        scenario_drift = 1.5 if phase < 10 else (-1.0 if phase < 17 else 0.25)
+    else:
+        scenario_drift = drift
+    move = (scenario_drift / ticks_per_candle + float(rng.normal(0, 1.8 / np.sqrt(ticks_per_candle)))) if run_sim else 0.0
     spot_now = max(1000.0, float(active["close"]) + move)
     active["close"] = spot_now
     active["high"] = max(float(active["high"]), spot_now)
     active["low"] = min(float(active["low"]), spot_now)
     active["volume"] += int(rng.integers(100, 900))
-    st.session_state.desk_tick = tick + 1
+    if run_sim:
+        st.session_state.desk_tick = tick + 1
     st.session_state.desk_bars = bars[-300:]
     spot_candles = pd.DataFrame(st.session_state.desk_bars[-180:])
     # Synthetic option price is deliberately illustrative, not a pricing model.
@@ -178,7 +193,7 @@ with left:
         f2.update_layout(template="plotly_dark",height=530,xaxis_rangeslider_visible=False,yaxis_title="Illustrative / replay premium (₹)",margin=dict(l=8,r=8,t=15,b=8),uirevision=f"desk-contract-{option_side}")
         st.plotly_chart(f2,use_container_width=True)
     with st.expander("Practice option chain", expanded=False):
-        strikes = np.arange(max(1000, int(strike)-500), int(strike)+550, 50)
+        strikes = list(range(max(22000, int(strike)-500), min(27000, int(strike)+500)+1, 50))
         rows = []
         for k in strikes:
             distance = (k-int(strike))/50
@@ -186,7 +201,21 @@ with left:
             pe = max(0.05, premium_now + distance*4.5)
             rows.append({"CE LTP (illustrative)":round(ce,2),"Strike":int(k),"PE LTP (illustrative)":round(pe,2),"Selected": "◀" if int(k)==int(strike) else ""})
         st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-        st.caption("This compact chain is illustrative. Change the strike using the selector above; it does not represent a live exchange option chain.")
+        st.markdown("**Jump to a strike**")
+        chain_cols = st.columns([2, 1, 1])
+        with chain_cols[0]:
+            chain_pick = st.selectbox("Choose strike from chain", strikes, index=strikes.index(int(strike)), key="desk_chain_pick")
+        with chain_cols[1]:
+            if st.button("Use CE", use_container_width=True):
+                st.session_state["desk_side"] = "CE"
+                st.session_state["desk_strike_selector"] = int(chain_pick)
+                st.rerun()
+        with chain_cols[2]:
+            if st.button("Use PE", use_container_width=True):
+                st.session_state["desk_side"] = "PE"
+                st.session_state["desk_strike_selector"] = int(chain_pick)
+                st.rerun()
+        st.caption("Illustrative chain only. Strike selection updates the practice ticket; these premiums are not live exchange quotes.")
 
 with right:
     st.subheader("Paper order ticket")
@@ -240,4 +269,4 @@ if st.session_state.desk_journal:
 else:
     st.caption("No paper trades yet. Use BUY PAPER and SELL / CLOSE to practise entries and exits.")
 
-st.caption("Educational simulator only. Synthetic option premiums are not valued using Greeks, volatility surface, expiry, time decay or bid/ask spread. Historical replay uses the exact CE/PE pair saved in local files; changing strike in that mode changes the display label only. No real orders are sent.")
+st.caption("Educational simulator only. Synthetic option premiums are not valued using Greeks, volatility surface, expiry, time decay or bid/ask spread. Historical replay uses the exact CE/PE pair saved in local files; changing strike in that mode changes the display label only. Use the scenario selector to practise trend, pullback, range and breakout/retest behaviour. No real orders are sent.")
