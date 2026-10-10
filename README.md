@@ -1,47 +1,61 @@
 # NIFTY Scalper Practice Dashboard
 
-A NIFTY options scalper-style **practice simulator** inspired by compact chart, strike-selection, one-tap order, position and P&L workflows. It supports automatically advancing practice candles and paper trades. No real orders are sent.
+A NIFTY options scalper-style practice simulator with synchronized NIFTY spot, CE and PE historical replay, moving candles, paper orders and P&L. It never sends real orders.
 
-## Simulated live movement (works after market hours)
+## Get and load real historical data (Kotak Neo)
 
-- Enable **Animate simulated market** in the sidebar. The chart advances automatically, with a configurable 1–5 second delay per candle.
-- Without a file, it creates clearly labeled synthetic practice candles. This is for practising the UI and order/P&L workflow only; it is not historical or current market data.
-- For realistic replay, upload a historical option-contract OHLCV CSV with timestamp, open, high, low, close and volume. The chart replays one candle at a time and can loop.
-- The selected practice option premium follows the replay price so you can practise simulated entries, exits and P&L as the chart moves.
-- Synthetic/replay data must never be interpreted as live market prices or a predictive signal.
+The repository includes a downloader. It uses your own Kotak Neo Trade API consumer key to request real historical OHLCV for NIFTY 50 and a current near-ATM CE/PE pair. The dashboard automatically loads the resulting files from `data/replay/` and displays three aligned charts.
 
-## Optional actual Kotak Neo quotes
+**I cannot fetch your account's private Kotak data from this chat, and I have not included fake data under the label of real backdata.** The downloader needs your local API token. Kotak only returns data for supported active contracts; expired options may not be available. Historical 1/3/5-minute requests are limited to 30 days per request; 10/15-minute requests are limited to 60 days. See the [official historical-data API docs](https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/market_data/historical_data.md) and [option-chain docs](https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/market_data/option_chain.md).
 
-The sidebar also has a separate **Enable Kotak Neo live quote polling** control. This is optional and distinct from practice replay. It requires your own Trade API consumer key and market-data access.
+### Windows PowerShell — download last month's 1-minute candles
 
-1. Copy .env.example to .env locally.
-2. Set NEO_CONSUMER_KEY in .env.
-3. Do not commit .env or share the token.
-4. Install requirements and restart Streamlit.
+1. Pull the latest code and install dependencies:
 
-The live quote chart polls every 3–15 seconds. It is not a tick-by-tick WebSocket stream. There is no silent fallback to third-party or demo data when the API fails.
+    cd "$HOME\Downloads\nifty-practice-trading-dashboard"
+    git pull origin main
+    python -m pip install -r requirements.txt
+
+2. Create your local token file if you have not already:
+
+    Copy-Item .env.example .env
+    notepad .env
+
+3. Put your own Kotak Neo Trade API token in `.env` as `NEO_CONSUMER_KEY=...`. Never commit or share the token.
+
+4. Run the downloader (defaults to the last 30 calendar days ending yesterday):
+
+    python scripts/download_nifty_replay.py
+
+   For 3-minute candles or a different date range:
+
+    python scripts/download_nifty_replay.py --start 2026-09-10 --end 2026-10-09 --interval 3min
+
+5. Start the app:
+
+    python -m streamlit run app.py
+
+The downloader writes actual returned data to:
+- `data/replay/nifty_spot.csv`
+- `data/replay/nifty_ce.csv`
+- `data/replay/nifty_pe.csv`
+- `data/replay/manifest.csv`
+
+The app joins the three datasets by timestamp, so the replay cursor moves across matching spot, CE and PE candles together. It locks the practice strike to the downloaded CE/PE pair. If the API fails or returns no history, it prints an error rather than fabricating real data. Downloaded data is local; it is not committed to GitHub.
+
+## Practice replay
+
+- Enable **Animate simulated market** to advance one candle every 1–5 seconds.
+- With synchronized Kotak files present, the three charts use real historical candles and the current simulated premium comes from the replayed CE or PE close.
+- Without downloaded data, the fallback chart is synthetic UI practice only, clearly labeled; it is not actual NIFTY data.
+- Uploading one option OHLCV CSV is also supported, but only the synchronized three-file download gives aligned spot/CE/PE charts.
 
 ## Paper trading and P&L
 
-- CE/PE and strike selection, simulated BUY and close actions.
-- Position size as lots × editable lot-size setting.
-- Open-position, realized and unrealized P&L, estimated charges, cumulative closed-trade chart and downloadable CSV journal.
-- Paper orders do not reach a broker. Charges are configurable estimates; taxes/levies, spread, slippage, partial fills and latency are not fully modeled.
-- Paper positions and journal are held in Streamlit session state. Download the journal to retain a copy.
+- CE/PE selection, simulated entries and exits, open/realized P&L, estimated charges, cumulative P&L chart and downloadable journal.
+- No orders are sent to a broker.
+- Estimated charges do not fully model taxes/levies, spread, slippage, partial fills or latency. Verify lot size and contract expiry.
 
-## Install and run (Windows PowerShell)
+## Run tests
 
-    cd $HOME\Downloads\nifty-practice-trading-dashboard
-    python -m venv .venv
-    .\.venv\Scripts\Activate.ps1
-    python -m pip install -r requirements.txt
     python -m pytest -q
-    python -m streamlit run app.py
-
-## Historical replay CSV
-
-Use a file for the exact option contract with these columns:
-
-    timestamp,open,high,low,close,volume
-
-A single option-chain snapshot (strikes with CE/PE LTP and OI) is not an OHLCV time series. The chain panel remains a snapshot; to replay historical premium movement, upload the contract's actual candle CSV.
