@@ -98,6 +98,12 @@ if demo: st.error("DEMO MODE: prices, OI and volume are invented. Paper orders a
 if "live_quote_history" not in st.session_state: st.session_state.live_quote_history = []
 if "live_quote_error" not in st.session_state: st.session_state.live_quote_error = ""
 if "live_quote_client" not in st.session_state: st.session_state.live_quote_client = None
+if "live_quote_key" not in st.session_state: st.session_state.live_quote_key = None
+current_live_key = (live_segment, live_token.strip())
+if st.session_state.live_quote_key != current_live_key:
+    st.session_state.live_quote_history = []
+    st.session_state.live_quote_key = current_live_key
+
 if live_enabled:
     consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
     if not consumer_key:
