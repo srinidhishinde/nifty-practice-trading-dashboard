@@ -38,9 +38,9 @@ with control_cols[2]:
 with control_cols[3]:
     quantity = st.number_input("Quantity", min_value=1, max_value=10000, value=65, step=1)
 with control_cols[4]:
-    seconds_per_candle = st.select_slider("Seconds per candle", options=[15, 20, 30, 45, 60, 90, 120], value=60)
+    seconds_per_candle = st.select_slider("Seconds per candle", options=[15, 20, 30, 45, 60, 90, 120], value=15)
 with control_cols[5]:
-    refresh_seconds = st.select_slider("Refresh rate", options=[1, 2, 3, 4, 5], value=2)
+    refresh_seconds = st.select_slider("Candle movement refresh", options=[1, 2, 3, 4, 5], value=1)
 with control_cols[6]:
     scenario = st.selectbox("Price behaviour", ["Mixed market", "Uptrend with pullbacks", "Downtrend with bounces", "Range / choppy", "Breakout then retest"], index=0)
 
